@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Shield, Settings, Server, MapPin, Trash2, CheckCircle, 
   Upload, Network, Clock, FileOutput, Save, BellDot, 
@@ -8,13 +8,13 @@ import { MapContainer, TileLayer, Popup, CircleMarker, Circle, Polygon as Leafle
 import 'leaflet/dist/leaflet.css';
 
 // ==========================================
-// GEOMETRY ENGINE: Calculates Camera FOV Arcs
+// GEOMETRY ENGINE
 // ==========================================
 const getCameraFovPolygon = (lat, lng, radiusMeters, azimuth, fov) => {
   const R = 6371000;
   const centerLat = lat * (Math.PI / 180);
   const centerLng = lng * (Math.PI / 180);
-  const points = [[lat, lng]]; // Start at camera center
+  const points = [[lat, lng]]; 
   const startAngle = azimuth - (fov / 2);
   const endAngle = azimuth + (fov / 2);
 
@@ -30,186 +30,249 @@ const getCameraFovPolygon = (lat, lng, radiusMeters, azimuth, fov) => {
 // ==========================================
 // MODULE 1: DEVICE CONFIGURATION
 // ==========================================
-const DeviceConfigView = ({ devices, setDevices }) => {
+const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas }) => {
   const [status, setStatus] = useState({ message: 'System Ready', type: 'info' });
-  const [formData, setFormData] = useState({
-    id: '', type: 'Radar', lat: '', lng: '', innerRange: 0, outerRange: 250, azimuth: 0, fov: 360
-  });
 
-  const handleFileUpload = (event) => {
+  // EXPLICIT MANUAL DATABASE SYNC
+  const syncDevicesToDB = async () => {
+    try {
+      const response = await fetch('http://127.0.0.1:8000/api/config/devices', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(devices)
+      });
+      if (response.ok) {
+        alert("✅ SUCCESS: Sensors saved to PostgreSQL!");
+        setStatus({ message: "Sensors Saved to DB", type: "success" });
+      } else {
+        const text = await response.text();
+        alert("❌ PYTHON REJECTED THE DATA:\n" + text);
+      }
+    } catch (err) {
+      alert("🚨 NETWORK CRASH:\nThe browser blocked the connection to Python.\n" + err.message);
+    }
+  };
+
+  const syncSchemasToDB = async () => {
+    try {
+      const response = await fetch('http://127.0.0.1:8000/api/config/schemas', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sensorSchemas)
+      });
+      if (response.ok) {
+        alert("✅ SUCCESS: Packet Formats saved to PostgreSQL!");
+        setStatus({ message: "Formats Saved to DB", type: "success" });
+      } else {
+        const text = await response.text();
+        alert("❌ PYTHON REJECTED THE DATA:\n" + text);
+      }
+    } catch (err) {
+      alert("🚨 NETWORK CRASH:\nThe browser blocked the connection to Python.\n" + err.message);
+    }
+  };
+
+  const handleSensorJsonUpload = (event) => {
     const file = event.target.files[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = (e) => {
-      const text = e.target.result;
-      const extension = file.name.split('.').pop().toLowerCase();
-
       try {
-        let parsedDevices = [];
-        if (extension === 'json') {
-          const data = JSON.parse(text);
-          parsedDevices = data.map(d => ({
-            id: d.SensorId, type: d.SensorType,
-            innerRange: d.InnerRange, outerRange: d.OuterRange,
-            azimuth: d.Azimuth, fov: d.FOV,
-            lat: d.geometry?.coordinates?.[1] || d.lat || 0,
-            lng: d.geometry?.coordinates?.[0] || d.lng || 0
-          }));
-        } else if (extension === 'kml') {
-          const parser = new DOMParser();
-          const xml = parser.parseFromString(text, "text/xml");
-          const placemarks = xml.querySelectorAll("Placemark");
+        let text = e.target.result;
+        text = text.replace(/(:\s*)(Point\s*\([^)]+\))/gi, '$1"$2"');
+        text = text.replace(/(:\s*)(Polygon\s*\(\([\s\S]*?\)\))/gi, '$1"$2"');
+        text = text.replace(/,\s*([}\]])/g, '$1'); 
 
-          placemarks.forEach(pm => {
-            // 1. Check if it's a PIDS Polygon
-            const polyNode = pm.querySelector("Polygon coordinates");
-            if (polyNode) {
-              const coordText = polyNode.textContent.trim().split(/\s+/);
-              const latLngs = coordText.filter(c => c.includes(',')).map(c => {
-                const [lng, lat] = c.split(',');
-                return [parseFloat(lat), parseFloat(lng)];
-              });
-              parsedDevices.push({
-                id: pm.querySelector("name")?.textContent || `PIDS_BOUNDARY_${Math.floor(Math.random()*1000)}`,
-                type: "PIDS",
-                isPolygon: true,
-                polygon: latLngs,
-                lat: latLngs[0][0], lng: latLngs[0][1], // Fallback center
-                innerRange: 0, outerRange: 0, azimuth: 0, fov: 0
-              });
-            } else {
-              // 2. Check if it's a Standard Point (Radar/Camera)
-              const coordNode = pm.querySelector("Point coordinates");
-              const descNode = pm.querySelector("description");
-              if (coordNode && descNode) {
-                const coords = coordNode.textContent.trim().split(",");
-                const desc = descNode.textContent;
-                const extract = (key) => {
-                  const match = desc.match(new RegExp(`<B>${key}</B>\\s*=\\s*([^<]+)`, 'i'));
-                  return match ? match[1].trim() : null;
-                };
-                parsedDevices.push({
-                  id: extract("SensorId") || `UNK_${Math.floor(Math.random()*1000)}`,
-                  type: extract("SensorType") || "Unknown",
-                  isPolygon: false,
-                  innerRange: parseFloat(extract("InnerRange") || 0),
-                  outerRange: parseFloat(extract("OuterRange") || 100),
-                  azimuth: parseFloat(extract("Azimuth") || 0),
-                  fov: parseFloat(extract("FOV") || 360),
-                  lat: parseFloat(coords[1]),
-                  lng: parseFloat(coords[0])
-                });
-              }
+        const data = JSON.parse(text);
+        const parsedSensors = (Array.isArray(data) ? data : [data]).map(d => {
+          let lng = 0, lat = 0, isPolygon = false, polygonArr = [];
+          if (typeof d.geometry === 'string') {
+            if (d.geometry.toUpperCase().includes('POLYGON')) {
+               isPolygon = true;
+               const match = d.geometry.match(/POLYGON\s*\(\(([\s\S]+)\)\)/i);
+               if (match) {
+                 const pairs = match[1].split(',');
+                 polygonArr = pairs.map(pair => {
+                   const [plng, plat] = pair.trim().split(/\s+/);
+                   return [parseFloat(plat), parseFloat(plng)];
+                 });
+                 if (polygonArr.length > 0) { lat = polygonArr[0][0]; lng = polygonArr[0][1]; }
+               }
+            } else if (d.geometry.toUpperCase().includes('POINT')) {
+               const match = d.geometry.match(/Point\(\s*([0-9.-]+)\s*,\s*([0-9.-]+)\s*\)/i);
+               if (match) { lng = parseFloat(match[1]); lat = parseFloat(match[2]); }
             }
-          });
-        }
-        setDevices(prev => [...prev, ...parsedDevices]);
-        setStatus({ message: `Imported ${parsedDevices.length} assets from ${file.name}`, type: 'success' });
-        event.target.value = '';
-      } catch (err) {
-        setStatus({ message: `Import Error: ${err.message}`, type: 'error' });
+          }
+          return {
+            id: d.SensorId || `UNK_${Math.floor(Math.random()*1000)}`, type: d.SensorType || "Unknown",
+            innerRange: parseFloat(d.InnerRange || 0), outerRange: parseFloat(d.OuterRange || 100),
+            azimuth: parseFloat(d.Azimuth || 0), fov: parseFloat(d.FOV || 360),
+            alertCount: parseInt(d.AlertCount || 0), packetChoice: d.PacketChoice || "", lat, lng, isPolygon, polygon: polygonArr
+          };
+        });
+        
+        setDevices(prev => [...prev, ...parsedSensors]);
+        setStatus({ message: `Loaded ${parsedSensors.length} Sensors. Please click 'Save to DB'.`, type: 'info' });
+      } catch (err) { 
+        alert(`🚨 JSON SYNTAX ERROR!\n\nThe browser crashed trying to read your file.\nDetails: ${err.message}`);
       }
     };
     reader.readAsText(file);
   };
 
-  const handleManualSubmit = (e) => {
-    e.preventDefault();
-    setDevices(prev => [...prev, { ...formData, isPolygon: false, lat: parseFloat(formData.lat), lng: parseFloat(formData.lng) }]);
-    setStatus({ message: `Manually added ${formData.id}`, type: 'success' });
-    setFormData({ id: '', type: 'Radar', lat: '', lng: '', innerRange: 0, outerRange: 250, azimuth: 0, fov: 360 });
+  const handleSchemaUpload = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const parsedData = JSON.parse(e.target.result);
+        
+        // Allows arrays of multiple schemas in a single file upload
+        const schemasToAdd = (Array.isArray(parsedData) ? parsedData : [parsedData]).map(item => ({
+            name: (item.protocolName || 'UNKNOWN').toUpperCase(),
+            separator: item.separator || ',',
+            totalIndexes: item.fields ? item.fields.length : 0,
+            schema: item.fields || []
+        }));
+        
+        setSensorSchemas(prev => [...prev, ...schemasToAdd]);
+        setStatus({ message: `Loaded ${schemasToAdd.length} Protocol Schemas. Please click 'Save to DB'.`, type: 'info' });
+      } catch (err) { 
+        alert(`🚨 JSON SYNTAX ERROR!\n\nYour Packet Format JSON has a typo.\nDetails: ${err.message}`);
+      }
+    };
+    reader.readAsText(file);
   };
 
-  const removeDevice = (id) => setDevices(devices.filter(d => d.id !== id));
+  const handleEnvironmentKmlUpload = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const parser = new DOMParser();
+        const xml = parser.parseFromString(e.target.result, "text/xml");
+        const placemarks = xml.querySelectorAll("Placemark");
+        let parsedEnvironment = [];
+        placemarks.forEach(pm => {
+          const pointNode = pm.querySelector("Point coordinates");
+          if (pointNode) {
+            const coords = pointNode.textContent.trim().split(",");
+            parsedEnvironment.push({
+              id: pm.querySelector("name")?.textContent || `ENV_${Math.floor(Math.random()*1000)}`, type: "Environment", isPolygon: false,
+              lat: parseFloat(coords[1]), lng: parseFloat(coords[0]), innerRange: 0, outerRange: 0, azimuth: 0, fov: 0, alertCount: 0, packetChoice: ""
+            });
+          }
+        });
+        
+        setDevices(prev => [...prev, ...parsedEnvironment]);
+        setStatus({ message: `Loaded ${parsedEnvironment.length} Static Markers. Please click 'Save to DB'.`, type: 'info' });
+      } catch (err) { 
+        alert("🚨 KML SYNTAX ERROR!");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const removeDevice = (id) => {
+    setDevices(devices.filter(d => d.id !== id));
+    fetch(`http://127.0.0.1:8000/api/config/devices/${id}`, { method: 'DELETE' }).catch(console.error);
+  };
+
+  const removeSchema = (name) => {
+    setSensorSchemas(sensorSchemas.filter(s => s.name !== name));
+    fetch(`http://127.0.0.1:8000/api/config/schemas/${name}`, { method: 'DELETE' }).catch(console.error);
+  };
 
   return (
-    <div className="p-6 max-w-[1400px] mx-auto space-y-6">
+    <div className="p-6 max-w-[1600px] mx-auto space-y-6">
       <div className="flex items-center justify-between border-b border-slate-800 pb-4">
         <div>
-          <h2 className="text-2xl font-bold text-emerald-400 flex items-center space-x-2">
-            <Settings className="w-6 h-6" /> <span>Device Configuration</span>
-          </h2>
-          <p className="text-slate-400 text-sm mt-1">Import KMLs (Points & Polygons) or manually deploy hardware.</p>
+          <h2 className="text-2xl font-bold text-emerald-400 flex items-center space-x-2"><Settings className="w-6 h-6" /> <span>Device Configuration</span></h2>
+          <p className="text-slate-400 text-sm mt-1">Upload files to memory, then permanently lock them into PostgreSQL.</p>
         </div>
-        <div className={`px-4 py-2 rounded font-mono text-xs font-bold border ${status.type === 'error' ? 'bg-rose-950/50 border-rose-800 text-rose-400' : 'bg-emerald-950/50 border-emerald-800 text-emerald-400'}`}>
-          {status.message}
+        <div className={`px-4 py-2 rounded font-mono text-xs font-bold border ${status.type === 'error' ? 'bg-rose-950/50 border-rose-800 text-rose-400' : 'bg-emerald-950/50 border-emerald-800 text-emerald-400'}`}>{status.message}</div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-sm">
+          <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center"><Target className="w-4 h-4 mr-2 text-rose-400"/> Sensor Array Input</h3>
+          <div className="border-2 border-dashed border-slate-700 rounded-lg p-6 text-center hover:bg-slate-800/50 transition-colors relative">
+            <input type="file" accept=".json" onClick={(e) => { e.target.value = null; }} onChange={handleSensorJsonUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+            <Server className="w-8 h-8 text-slate-500 mx-auto mb-2" />
+            <p className="text-sm font-bold text-slate-300">Upload JSON File</p>
+            <p className="text-xs text-slate-500 mt-1">Parses Points and WKT Polygons</p>
+          </div>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-sm">
+          <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center"><Settings className="w-4 h-4 mr-2 text-fuchsia-400"/> Packet Format Input</h3>
+          <div className="border-2 border-dashed border-slate-700 rounded-lg p-6 text-center hover:bg-slate-800/50 transition-colors relative">
+            <input type="file" accept=".json" onClick={(e) => { e.target.value = null; }} onChange={handleSchemaUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+            <Server className="w-8 h-8 text-slate-500 mx-auto mb-2" />
+            <p className="text-sm font-bold text-slate-300">Upload JSON Schema</p>
+            <p className="text-xs text-slate-500 mt-1">Accepts multiple format objects</p>
+          </div>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-sm">
+          <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center"><MapPin className="w-4 h-4 mr-2 text-emerald-400"/> Environment Input</h3>
+          <div className="border-2 border-dashed border-slate-700 rounded-lg p-6 text-center hover:bg-slate-800/50 transition-colors relative">
+            <input type="file" accept=".kml" onClick={(e) => { e.target.value = null; }} onChange={handleEnvironmentKmlUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+            <MapPin className="w-8 h-8 text-slate-500 mx-auto mb-2" />
+            <p className="text-sm font-bold text-slate-300">Upload KML File</p>
+            <p className="text-xs text-slate-500 mt-1">Static Buildings, Trees, Towers</p>
+          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <div className="space-y-6">
-          <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
-            <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center"><Upload className="w-4 h-4 mr-2 text-cyan-400"/> Universal Import</h3>
-            <div className="border-2 border-dashed border-slate-700 rounded-lg p-6 text-center hover:bg-slate-800/50 transition-colors relative">
-              <input type="file" accept=".json,.kml,.csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-              <MapPin className="w-8 h-8 text-slate-500 mx-auto mb-2" />
-              <p className="text-sm font-bold text-slate-300">Drag & Drop or Click to Upload</p>
-              <p className="text-xs text-slate-500 mt-1">Supports Radar KMLs, Camera JSON, and PIDS Polygons</p>
-            </div>
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mt-6">
+        <div className="xl:col-span-2 bg-slate-900 border border-slate-800 rounded-lg flex flex-col overflow-hidden shadow-sm h-[400px]">
+          <div className="bg-slate-850 border-b border-slate-800 px-5 py-4 flex justify-between items-center">
+            <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center"><Server className="w-4 h-4 mr-2 text-indigo-400"/> Deployed Entities ({devices.length})</h3>
+            <button onClick={syncDevicesToDB} className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 px-4 rounded text-xs flex items-center shadow-lg">
+              <Save className="w-4 h-4 mr-2" /> SAVE SENSORS TO DB
+            </button>
           </div>
-
-          <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
-            <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center"><Settings className="w-4 h-4 mr-2 text-amber-400"/> Manual Point Entry</h3>
-            <form onSubmit={handleManualSubmit} className="space-y-4 text-sm">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2"><label className="block text-xs text-slate-500 mb-1">Sensor ID</label><input required value={formData.id} onChange={e => setFormData({...formData, id: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-white" /></div>
-                <div className="col-span-2">
-                  <label className="block text-xs text-slate-500 mb-1">Type</label>
-                  <select value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-white">
-                    <option>Radar</option><option>Camera</option><option>PIDS</option>
-                  </select>
-                </div>
-                <div><label className="block text-xs text-slate-500 mb-1">Latitude</label><input type="number" step="any" required value={formData.lat} onChange={e => setFormData({...formData, lat: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-white" /></div>
-                <div><label className="block text-xs text-slate-500 mb-1">Longitude</label><input type="number" step="any" required value={formData.lng} onChange={e => setFormData({...formData, lng: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-white" /></div>
-                <div><label className="block text-xs text-slate-500 mb-1">Inner Range (m)</label><input type="number" required value={formData.innerRange} onChange={e => setFormData({...formData, innerRange: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-cyan-400" /></div>
-                <div><label className="block text-xs text-slate-500 mb-1">Outer Range (m)</label><input type="number" required value={formData.outerRange} onChange={e => setFormData({...formData, outerRange: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-cyan-400" /></div>
-                <div><label className="block text-xs text-slate-500 mb-1">Azimuth (°)</label><input type="number" required value={formData.azimuth} onChange={e => setFormData({...formData, azimuth: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-amber-400" /></div>
-                <div><label className="block text-xs text-slate-500 mb-1">FOV (°)</label><input type="number" required value={formData.fov} onChange={e => setFormData({...formData, fov: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-amber-400" /></div>
-              </div>
-              <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 font-bold py-2 rounded transition-colors text-white">Add Hardware</button>
-            </form>
+          <div className="flex-1 overflow-auto p-0">
+            {devices.length === 0 ? <div className="h-full flex flex-col items-center justify-center text-slate-600 font-mono text-sm">No hardware or environment loaded.</div> : (
+              <table className="w-full text-left text-sm whitespace-nowrap">
+                <thead className="bg-slate-950/50 text-slate-400 font-mono text-xs sticky top-0 z-10"><tr><th className="p-3">ID / Protocol</th><th className="p-3">Location/Boundary</th><th className="p-3">Parameters</th><th className="p-3 text-right">Action</th></tr></thead>
+                <tbody className="divide-y divide-slate-800/50">
+                  {devices.map((dev, idx) => (
+                    <tr key={idx} className="hover:bg-slate-800/30">
+                      <td className="p-3"><div className={`font-bold ${dev.type === 'Environment' ? 'text-emerald-400' : 'text-slate-200'}`}>{dev.id}</div><div className="text-xs text-cyan-500 uppercase">{dev.packetChoice ? `PKT: ${dev.packetChoice}` : dev.type}</div></td>
+                      <td className="p-3 font-mono text-xs text-slate-400">{dev.isPolygon ? 'POLYGON (WKT)' : `${dev.lat.toFixed(4)}, ${dev.lng.toFixed(4)}`}</td>
+                      <td className="p-3 font-mono text-cyan-400 text-xs">{dev.type === 'Environment' ? 'Static Marker' : dev.isPolygon ? `${dev.alertCount} Target Alerts` : `${dev.innerRange}-${dev.outerRange}m | ${dev.alertCount} Alerts`}</td>
+                      <td className="p-3 text-right"><button onClick={() => removeDevice(dev.id)} className="text-slate-500 hover:text-rose-400"><Trash2 className="w-4 h-4 inline" /></button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
 
-        <div className="xl:col-span-2">
-          <div className="bg-slate-900 border border-slate-800 rounded-lg h-full flex flex-col overflow-hidden">
-            <div className="bg-slate-850 border-b border-slate-800 px-5 py-4 flex justify-between items-center">
-              <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center"><Server className="w-4 h-4 mr-2 text-indigo-400"/> Deployed Fleet Array ({devices.length})</h3>
-            </div>
-            <div className="flex-1 overflow-auto p-0">
-              {devices.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-slate-600 font-mono text-sm py-20">
-                  <Server className="w-12 h-12 mb-4 opacity-20" />
-                  No devices configured. Upload a file or add manually.
-                </div>
-              ) : (
-                <table className="w-full text-left text-sm whitespace-nowrap">
-                  <thead className="bg-slate-950/50 text-slate-400 font-mono text-xs sticky top-0">
-                    <tr>
-                      <th className="p-3">ID / Type</th>
-                      <th className="p-3">Location/Boundary</th>
-                      <th className="p-3">Range</th>
-                      <th className="p-3">Angles</th>
-                      <th className="p-3 text-right">Actions</th>
+        <div className="bg-slate-900 border border-slate-800 rounded-lg flex flex-col overflow-hidden shadow-sm h-[400px]">
+          <div className="bg-slate-850 border-b border-slate-800 px-5 py-4 flex justify-between items-center">
+            <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center"><Settings className="w-4 h-4 mr-2 text-fuchsia-400"/> Packet Formats ({sensorSchemas.length})</h3>
+            <button onClick={syncSchemasToDB} className="bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-bold py-1.5 px-4 rounded text-xs flex items-center shadow-lg">
+              <Save className="w-4 h-4 mr-2" /> SAVE FORMATS TO DB
+            </button>
+          </div>
+          <div className="flex-1 overflow-auto">
+            {sensorSchemas.length === 0 ? <div className="p-10 text-center text-slate-500 font-mono text-xs">No schemas loaded.</div> : (
+              <table className="w-full text-left text-xs whitespace-nowrap">
+                <thead className="bg-slate-950/50 text-slate-400 font-mono sticky top-0"><tr><th className="p-3">Protocol Match</th><th className="p-3 text-right">Action</th></tr></thead>
+                <tbody className="divide-y divide-slate-800/50">
+                  {sensorSchemas.map((schema, idx) => (
+                    <tr key={idx} className="hover:bg-slate-800/30">
+                      <td className="p-3 font-bold text-fuchsia-400">{schema.name} <span className="text-slate-500 font-normal">[{schema.separator}]</span></td>
+                      <td className="p-3 text-right"><button onClick={() => removeSchema(schema.name)} className="text-slate-500 hover:text-rose-400"><Trash2 className="w-4 h-4 inline" /></button></td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/50">
-                    {devices.map((dev, idx) => (
-                      <tr key={idx} className="hover:bg-slate-800/30">
-                        <td className="p-3"><div className="font-bold text-slate-200">{dev.id}</div><div className="text-xs text-slate-500 uppercase">{dev.type}</div></td>
-                        <td className="p-3 font-mono text-xs text-slate-400">
-                          {dev.isPolygon ? 'POLYGON DEFINED' : `${dev.lat.toFixed(4)}, ${dev.lng.toFixed(4)}`}
-                        </td>
-                        <td className="p-3 font-mono text-cyan-400">{dev.isPolygon ? 'N/A' : `${dev.innerRange}m - ${dev.outerRange}m`}</td>
-                        <td className="p-3 font-mono text-amber-400">{dev.isPolygon ? 'N/A' : `${dev.azimuth}° / ${dev.fov}°`}</td>
-                        <td className="p-3 text-right"><button onClick={() => removeDevice(dev.id)} className="text-slate-500 hover:text-rose-400"><Trash2 className="w-4 h-4 inline" /></button></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       </div>
@@ -222,6 +285,7 @@ const DeviceConfigView = ({ devices, setDevices }) => {
 // ==========================================
 const ScenarioBuilderView = ({ scenario, setScenario, devices }) => {
   const [status, setStatus] = useState('');
+  const configurableSensors = devices.filter(d => d.type !== 'Environment');
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -231,28 +295,36 @@ const ScenarioBuilderView = ({ scenario, setScenario, devices }) => {
   const toggleDevice = (id) => {
     setScenario(prev => {
       const isActive = prev.activeDevices.includes(id);
-      return {
-        ...prev,
-        activeDevices: isActive ? prev.activeDevices.filter(d => d !== id) : [...prev.activeDevices, id]
-      };
+      return { ...prev, activeDevices: isActive ? prev.activeDevices.filter(d => d !== id) : [...prev.activeDevices, id] };
     });
   };
 
-  const handleSave = (e) => {
+  const handleSave = async (e) => {
     e.preventDefault();
-    if(scenario.activeDevices.length === 0) return alert("You must select at least one device for the scenario!");
-    setStatus('Scenario successfully compiled and saved to memory.');
-    setTimeout(() => setStatus(''), 4000);
+    if(scenario.activeDevices.length === 0) return alert("You must select at least one active sensor!");
+    
+    try {
+        const response = await fetch('http://127.0.0.1:8000/api/state/scenario', { 
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(scenario) 
+        });
+        if (response.ok) {
+            setStatus('Scenario compiled and State Saved to Database.');
+            setTimeout(() => setStatus(''), 4000);
+        } else {
+            const text = await response.text();
+            alert("❌ PYTHON REJECTED SCENARIO:\n" + text);
+        }
+    } catch (err) {
+        alert("🚨 NETWORK CRASH:\nThe browser blocked the connection to Python.\n" + err.message);
+    }
   };
 
   return (
     <div className="p-6 max-w-[1200px] mx-auto space-y-6">
       <div className="flex items-center justify-between border-b border-slate-800 pb-4">
         <div>
-          <h2 className="text-2xl font-bold text-indigo-400 flex items-center space-x-2">
-            <Sliders className="w-6 h-6" /> <span>Scenario Builder</span>
-          </h2>
-          <p className="text-slate-400 text-sm mt-1">Bind hardware to your mission and configure output networks.</p>
+          <h2 className="text-2xl font-bold text-indigo-400 flex items-center space-x-2"><Sliders className="w-6 h-6" /> <span>Scenario Builder</span></h2>
+          <p className="text-slate-400 text-sm mt-1">Bind active sensors to your mission. Checkboxes and Target IP are auto-saved.</p>
         </div>
         <span className="text-emerald-400 text-sm font-mono font-bold">{status && <><CheckCircle className="w-4 h-4 inline mr-2" />{status}</>}</span>
       </div>
@@ -269,17 +341,11 @@ const ScenarioBuilderView = ({ scenario, setScenario, devices }) => {
 
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 shadow-sm">
           <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center border-b border-slate-800 pb-2"><CheckSquare className="w-4 h-4 mr-2 text-amber-400"/> Hardware Binding</h3>
-          <p className="text-[11px] text-slate-500 mb-3">Select the specific units from your fleet that will generate alerts during this scenario.</p>
           <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
-            {devices.length === 0 ? (
-              <div className="text-xs font-mono text-rose-400 p-3 bg-rose-950/20 border border-rose-900/50 rounded">No hardware configured. Go to Device Config.</div>
-            ) : (
-              devices.map(dev => (
+            {configurableSensors.length === 0 ? <div className="text-xs font-mono text-rose-400 p-3 bg-rose-950/20 border border-rose-900/50 rounded">No sensors loaded.</div> : (
+              configurableSensors.map(dev => (
                 <div key={dev.id} onClick={() => toggleDevice(dev.id)} className={`flex items-center justify-between p-3 rounded cursor-pointer border transition-colors ${scenario.activeDevices.includes(dev.id) ? 'bg-indigo-950/40 border-indigo-500/50' : 'bg-slate-950 border-slate-800 hover:border-slate-700'}`}>
-                  <div>
-                    <span className={`text-sm font-bold ${scenario.activeDevices.includes(dev.id) ? 'text-indigo-400' : 'text-slate-300'}`}>{dev.id}</span>
-                    <span className="text-xs text-slate-500 ml-2 uppercase">({dev.type})</span>
-                  </div>
+                  <div><span className={`text-sm font-bold ${scenario.activeDevices.includes(dev.id) ? 'text-indigo-400' : 'text-slate-300'}`}>{dev.id}</span><span className="text-xs text-slate-500 ml-2 uppercase">({dev.type})</span></div>
                   <input type="checkbox" checked={scenario.activeDevices.includes(dev.id)} readOnly className="w-4 h-4 accent-indigo-500" />
                 </div>
               ))
@@ -295,9 +361,7 @@ const ScenarioBuilderView = ({ scenario, setScenario, devices }) => {
           </div>
         </div>
 
-        <div className="md:col-span-2 flex justify-end">
-          <button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-8 py-3 rounded text-sm shadow-lg"><Save className="w-4 h-4 inline mr-2" />SAVE SCENARIO ARCHITECTURE</button>
-        </div>
+        <div className="md:col-span-2 flex justify-end"><button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-8 py-3 rounded text-sm shadow-lg"><Save className="w-4 h-4 inline mr-2" />SAVE SCENARIO ARCHITECTURE</button></div>
       </form>
     </div>
   );
@@ -306,12 +370,14 @@ const ScenarioBuilderView = ({ scenario, setScenario, devices }) => {
 // ==========================================
 // MODULE 3: ALERT GENERATOR
 // ==========================================
-const AlertGeneratorView = ({ devices, scenario, alertConfig, setAlertConfig, setCompletedRuns, setActiveAlerts }) => {
+const AlertGeneratorView = ({ devices, scenario, alertConfig, setAlertConfig, setCompletedRuns, setActiveAlerts, sensorSchemas }) => {
   const [isRunning, setIsRunning] = useState(false);
   const [logs, setLogs] = useState([]);
   const [progress, setProgress] = useState(0);
 
   const activeFleet = devices.filter(d => scenario.activeDevices.includes(d.id));
+  const environmentFleet = devices.filter(d => d.type === 'Environment');
+  const targetTotalAlerts = activeFleet.reduce((acc, dev) => acc + (dev.alertCount || 0), 0);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -319,149 +385,107 @@ const AlertGeneratorView = ({ devices, scenario, alertConfig, setAlertConfig, se
   };
 
   const handleStartSimulation = () => {
-    if (activeFleet.length === 0) return alert("MISSION ABORT: No hardware bound to scenario.");
-    if (alertConfig.totalAlerts <= 0) return alert("Please specify a valid number of alerts.");
+    if (activeFleet.length === 0) return alert("MISSION ABORT: No active sensors bound.");
+    if (targetTotalAlerts <= 0) return alert("MISSION ABORT: Bound sensors have an AlertCount of 0.");
     
     setIsRunning(true);
-    setLogs([{ time: new Date().toLocaleTimeString(), msg: `SYSTEM: Engaging '${scenario.name}'. Connecting to UDP Engine at 127.0.0.1:8000...`, type: 'info' }]);
-    setProgress(0);
+    setLogs([{ time: new Date().toLocaleTimeString(), msg: `SYSTEM: Engaging '${scenario.name}'. UDP Engine Active.`, type: 'info' }]);
+    setProgress(0); setActiveAlerts([]); 
     
-    // Clear old map points
-    setActiveAlerts([]); 
+    fetch('http://127.0.0.1:8000/api/state/alerts', { method: 'DELETE' }).catch(console.error);
+
+    let executionPool = [];
+    activeFleet.forEach(dev => { for(let i = 0; i < (dev.alertCount || 0); i++) { executionPool.push(dev); } });
+    executionPool = executionPool.sort(() => Math.random() - 0.5);
 
     let currentAlert = 0;
     let generatedAlertsMemory = []; 
     
     const runTick = async () => {
-      if (currentAlert >= alertConfig.totalAlerts) {
+      if (currentAlert >= targetTotalAlerts) {
         setIsRunning(false);
-        setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `SYSTEM: Transmission Complete. ${alertConfig.totalAlerts} packets sent.`, type: 'info' }, ...prev]);
-        
-        // Save to React State for the Export Tab
-        setCompletedRuns(prev => [...prev, {
-          id: Date.now(), scenarioName: scenario.name, alertsGenerated: alertConfig.totalAlerts,
-          timestamp: new Date().toLocaleString(), devices: activeFleet, alerts: generatedAlertsMemory
-        }]);
+        setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `SYSTEM: Transmission Complete. ${targetTotalAlerts} packets sent.`, type: 'info' }, ...prev]);
+        setCompletedRuns(prev => [...prev, { id: Date.now(), scenarioName: scenario.name, alertsGenerated: targetTotalAlerts, timestamp: new Date().toLocaleString(), devices: [...activeFleet, ...environmentFleet], alerts: generatedAlertsMemory }]);
 
-        // NEW: SEND TO POSTGRESQL DATABASE!
         try {
-          setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `DATABASE: Committing payload to PostgreSQL...`, type: 'info' }, ...prev]);
+          setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `DATABASE: Committing payload...`, type: 'info' }, ...prev]);
           fetch('http://127.0.0.1:8000/api/database/save', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ scenarioName: scenario.name, alerts: generatedAlertsMemory })
-          })
-          .then(res => res.json())
-          .then(data => {
-            if(data.status === "success") {
-               setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `DATABASE: Successfully ${data.message}`, type: 'success' }, ...prev]);
-            }
-          });
-        } catch (e) {
-          setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `DATABASE ERROR: Could not reach Postgres.`, type: 'error' }, ...prev]);
-        }
-
+          }).then(res => res.json()).then(data => { if(data.status === "success") setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `DATABASE: ${data.message}`, type: 'success' }, ...prev]); });
+        } catch (e) { setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `DB ERROR: Postgres unreachable.`, type: 'error' }, ...prev]); }
         return;
       }
 
-      currentAlert++;
-      const dev = activeFleet[Math.floor(Math.random() * activeFleet.length)];
+      const dev = executionPool[currentAlert]; currentAlert++;
+      
+      // EXPLICIT MATCH: Maps PacketChoice to uploaded ProtocolName
+      const selectedSchema = sensorSchemas.find(s => s.name.toUpperCase() === (dev.packetChoice || "").toUpperCase()) || null;
 
       try {
         const response = await fetch('http://127.0.0.1:8000/api/transmit', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            targetIp: scenario.udpIp, targetPort: scenario.udpPort,
-            trackId: currentAlert, device: dev
-          })
+          body: JSON.stringify({ targetIp: scenario.udpIp, targetPort: scenario.udpPort, trackId: currentAlert, device: dev, customSchema: selectedSchema ? selectedSchema.schema : null, customSeparator: selectedSchema ? selectedSchema.separator : "," })
         });
-        
         const result = await response.json();
-
         if (result.status === "success") {
-            generatedAlertsMemory.push(result.alert_data);
-            setActiveAlerts(prev => [...prev, result.alert_data]);
-            setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `[${dev.id}] SPIDER -> ${result.packet}`, type: 'success' }, ...prev]);
-        } else {
-            setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `[ERROR] Python Error: ${result.message}`, type: 'error' }, ...prev]);
-        }
+            generatedAlertsMemory.push(result.alert_data); setActiveAlerts(prev => [...prev, result.alert_data]);
+            
+            fetch('http://127.0.0.1:8000/api/state/alerts', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(result.alert_data)
+            }).catch(()=>{});
 
-      } catch (error) { 
-        setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `[ERROR] Connection refused. Is Uvicorn running?`, type: 'error' }, ...prev]);
-      }
+            setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `[${dev.id}] -> ${result.packet}`, type: 'success' }, ...prev]);
+        } else { setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `[ERROR] Python: ${result.message}`, type: 'error' }, ...prev]); }
+      } catch (error) { setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `[ERROR] Engine Refused.`, type: 'error' }, ...prev]); }
 
-      setProgress(Math.floor((currentAlert / alertConfig.totalAlerts) * 100));
+      setProgress(Math.floor((currentAlert / targetTotalAlerts) * 100));
       const delay = Math.random() * (alertConfig.maxDelaySec - alertConfig.minDelaySec) + alertConfig.minDelaySec;
       window.simTimeout = setTimeout(runTick, delay * 1000);
     };
-
     runTick();
   };
 
   const handleStopSimulation = () => {
-    clearTimeout(window.simTimeout);
-    setIsRunning(false);
-    setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: 'SYSTEM: Transmission Manually Aborted.', type: 'error' }, ...prev]);
+    clearTimeout(window.simTimeout); setIsRunning(false);
+    setLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: 'SYSTEM: Transmission Aborted.', type: 'error' }, ...prev]);
   };
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-6">
       <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-        <div>
-          <h2 className="text-2xl font-bold text-rose-400 flex items-center space-x-2">
-            <BellDot className="w-6 h-6" /> <span>Alert Generator</span>
-          </h2>
-          <p className="text-slate-400 text-sm mt-1">Generate dynamic UDP telemetry using parameters from '{scenario.name}'.</p>
-        </div>
+        <div><h2 className="text-2xl font-bold text-rose-400 flex items-center space-x-2"><BellDot className="w-6 h-6" /> <span>Alert Generator</span></h2><p className="text-slate-400 text-sm mt-1">Executing {targetTotalAlerts} total alerts across bounded sensor arrays.</p></div>
       </div>
-
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <div className="space-y-6">
           <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 shadow-sm">
-            <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-5 flex items-center border-b border-slate-800 pb-2">
-              <Sliders className="w-4 h-4 mr-2 text-cyan-400"/> Transmission Parameters
-            </h3>
+            <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-5 flex items-center border-b border-slate-800 pb-2"><Sliders className="w-4 h-4 mr-2 text-cyan-400"/> Transmission Parameters</h3>
             <div className="space-y-4 mb-6">
-              <div><label className="block text-xs font-mono text-slate-500 mb-1">Total Packets to Generate</label><input type="number" name="totalAlerts" value={alertConfig.totalAlerts} onChange={handleChange} disabled={isRunning} className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-rose-400 font-bold disabled:opacity-50" /></div>
-              
+              <div className="bg-slate-950 border border-slate-800 rounded px-3 py-3 text-center">
+                 <span className="block text-xs font-mono text-slate-500 mb-1">Target Mission Payload</span>
+                 <span className="text-2xl text-rose-400 font-bold">{targetTotalAlerts} Packets</span>
+              </div>
               <div>
                 <label className="block text-xs font-mono text-slate-500 mb-1 flex items-center"><Clock className="w-3 h-3 mr-1 text-amber-400"/> Timing Physics (Seconds)</label>
                 <div className="grid grid-cols-2 gap-3">
-                  <input type="number" step="0.1" name="minDelaySec" value={alertConfig.minDelaySec} onChange={handleChange} disabled={isRunning} placeholder="Min Delay" className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-amber-400 font-mono disabled:opacity-50" />
-                  <input type="number" step="0.1" name="maxDelaySec" value={alertConfig.maxDelaySec} onChange={handleChange} disabled={isRunning} placeholder="Max Delay" className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-amber-400 font-mono disabled:opacity-50" />
+                  <input type="number" step="0.1" name="minDelaySec" value={alertConfig.minDelaySec} onChange={handleChange} disabled={isRunning} placeholder="Min" className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-amber-400 font-mono disabled:opacity-50" />
+                  <input type="number" step="0.1" name="maxDelaySec" value={alertConfig.maxDelaySec} onChange={handleChange} disabled={isRunning} placeholder="Max" className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-amber-400 font-mono disabled:opacity-50" />
                 </div>
               </div>
             </div>
-
             <div className="mb-6">
-              <div className="flex justify-between text-xs font-mono mb-1 text-slate-400"><span>Simulation Progress</span><span>{progress}%</span></div>
+              <div className="flex justify-between text-xs font-mono mb-1 text-slate-400"><span>Progress</span><span>{progress}%</span></div>
               <div className="w-full bg-slate-950 rounded-full h-2 border border-slate-800"><div className="bg-rose-500 h-full rounded-full transition-all duration-300" style={{ width: `${progress}%` }}></div></div>
             </div>
-
-            {!isRunning ? (
-              <button onClick={handleStartSimulation} className="w-full flex justify-center items-center space-x-2 bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded text-sm shadow-lg">
-                <Play className="w-4 h-4 fill-current" /> <span>ENGAGE TRANSMITTER</span>
-              </button>
-            ) : (
-              <button onClick={handleStopSimulation} className="w-full flex justify-center items-center space-x-2 bg-slate-700 hover:bg-slate-600 text-white font-bold py-3 rounded text-sm shadow-lg animate-pulse">
-                <Square className="w-4 h-4 fill-current" /> <span>ABORT</span>
-              </button>
-            )}
+            {!isRunning ? ( <button onClick={handleStartSimulation} className="w-full flex justify-center items-center space-x-2 bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded text-sm shadow-lg"><Play className="w-4 h-4 fill-current" /> <span>ENGAGE TRANSMITTER</span></button> ) : (
+              <button onClick={handleStopSimulation} className="w-full flex justify-center items-center space-x-2 bg-slate-700 hover:bg-slate-600 text-white font-bold py-3 rounded text-sm shadow-lg animate-pulse"><Square className="w-4 h-4 fill-current" /> <span>ABORT</span></button> )}
           </div>
         </div>
-
         <div className="xl:col-span-2">
           <div className="bg-[#0A0A0A] border border-slate-800 rounded-lg h-full flex flex-col overflow-hidden shadow-2xl relative">
-            <div className="bg-slate-900 border-b border-slate-800 px-5 py-3 flex justify-between items-center z-10">
-              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center font-mono"><Terminal className="w-4 h-4 mr-2 text-slate-500"/> Live UDP Telemetry</h3>
-              {isRunning && <span className="flex h-2 w-2 relative"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span></span>}
-            </div>
+            <div className="bg-slate-900 border-b border-slate-800 px-5 py-3 flex justify-between items-center z-10"><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center font-mono"><Terminal className="w-4 h-4 mr-2 text-slate-500"/> Live UDP Telemetry</h3></div>
             <div className="flex-1 overflow-y-auto p-4 font-mono text-[11px] leading-relaxed space-y-1">
-              {logs.length === 0 ? <div className="text-slate-600 mt-2">Waiting for simulation to begin...</div> : logs.map((log, idx) => (
-                <div key={idx} className={`flex space-x-3 ${log.type === 'error' ? 'text-rose-400' : log.type === 'info' ? 'text-cyan-400' : 'text-emerald-400'}`}>
-                  <span className="opacity-50 shrink-0">[{log.time}]</span><span className="break-all">{log.msg}</span>
-                </div>
-              ))}
+              {logs.length === 0 ? <div className="text-slate-600 mt-2">Waiting for simulation to begin...</div> : logs.map((log, idx) => (<div key={idx} className={`flex space-x-3 ${log.type === 'error' ? 'text-rose-400' : log.type === 'info' ? 'text-cyan-400' : 'text-emerald-400'}`}><span className="opacity-50 shrink-0">[{log.time}]</span><span className="break-all">{log.msg}</span></div>))}
             </div>
           </div>
         </div>
@@ -471,115 +495,43 @@ const AlertGeneratorView = ({ devices, scenario, alertConfig, setAlertConfig, se
 };
 
 // ==========================================
-// VIEW 4: TACTICAL MAP (LIGHT THEME & EXACT OVERLAYS)
+// VIEW 4: TACTICAL MAP
 // ==========================================
 const MapView = ({ devices, alerts }) => {
-  // If devices are loaded, center on the first one. Otherwise, default fallback.
   const mapCenter = devices.length > 0 && devices[0].lat ? [devices[0].lat, devices[0].lng] : [19.2813, 72.8693];
 
   return (
     <div className="p-6 space-y-6 max-w-[1600px] mx-auto h-[calc(100vh-4rem)] flex flex-col font-sans">
       <div className="border-b border-slate-800 pb-4 flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-white flex items-center space-x-2">
-            <Globe className="w-6 h-6 text-cyan-400" />
-            <span>Tactical Map Visualizer</span>
-          </h2>
-          <p className="text-slate-400 text-sm mt-1">Live tracking on high-visibility CartoDB Voyager layer.</p>
-        </div>
-        <div className="flex space-x-3">
-          <div className="flex items-center space-x-2 bg-rose-950/40 border border-rose-900 rounded px-3 py-1">
-            <Target className="w-4 h-4 text-rose-500" />
-            <span className="text-xs font-mono text-rose-400 font-bold">ACTIVE THREATS: {alerts ? alerts.length : 0}</span>
-          </div>
-        </div>
+        <div><h2 className="text-xl font-bold text-white flex items-center space-x-2"><Globe className="w-6 h-6 text-cyan-400" /><span>Tactical Map Visualizer</span></h2></div>
+        <div className="flex space-x-3"><div className="flex items-center space-x-2 bg-rose-950/40 border border-rose-900 rounded px-3 py-1"><Target className="w-4 h-4 text-rose-500" /><span className="text-xs font-mono text-rose-400 font-bold">ACTIVE THREATS: {alerts ? alerts.length : 0}</span></div></div>
       </div>
-
       <div className="flex-1 rounded-xl overflow-hidden border border-slate-300 shadow-2xl relative z-0">
-        <MapContainer 
-          center={mapCenter} 
-          zoom={14} 
-          className="h-full w-full"
-          style={{ background: '#f8fafc' }}
-        >
-          {/* THE LIGHT THEME MAP (Matches Google Earth visibility better) */}
-          <TileLayer
-            attribution='&copy; <a href="https://carto.com/">CartoDB</a>'
-            url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-          />
-
-          {/* PLOT SENSOR HARDWARE & BOUNDARIES */}
+        <MapContainer center={mapCenter} zoom={14} className="h-full w-full" style={{ background: '#f8fafc' }}>
+          <TileLayer attribution='&copy; CartoDB' url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png" />
           {devices && devices.map((dev) => (
             <React.Fragment key={dev.id}>
-              
-              {/* 1. PIDS BOUNDARY POLYGON (Like the massive Red area in your image) */}
-              {dev.isPolygon && (
-                <LeafletPolygon 
-                  positions={dev.polygon} 
-                  pathOptions={{ color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.3, weight: 3 }}
-                >
-                   <Popup className="font-mono text-xs"><strong>{dev.id}</strong><br/>PIDS Perimeter</Popup>
-                </LeafletPolygon>
+              {dev.type === 'Environment' && (
+                <CircleMarker center={[dev.lat, dev.lng]} radius={4} pathOptions={{ color: '#475569', fillColor: '#94a3b8', fillOpacity: 1, weight: 1 }}><Popup className="font-mono text-xs"><strong>{dev.id}</strong><br/>Environment Asset</Popup></CircleMarker>
               )}
-
-              {/* 2. CAMERA FOV CONE (Pie Slices) */}
+              {dev.isPolygon && dev.polygon && dev.type !== 'Environment' && (
+                <LeafletPolygon positions={dev.polygon} pathOptions={{ color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.3, weight: 3 }}><Popup className="font-mono text-xs"><strong>{dev.id}</strong><br/>PIDS Perimeter</Popup></LeafletPolygon>
+              )}
               {!dev.isPolygon && dev.type.toUpperCase() === 'CAMERA' && (
-                <LeafletPolygon 
-                  positions={getCameraFovPolygon(dev.lat, dev.lng, dev.outerRange, dev.azimuth, dev.fov)}
-                  pathOptions={{ color: '#eab308', fillColor: '#eab308', fillOpacity: 0.2, weight: 1 }}
-                />
+                <LeafletPolygon positions={getCameraFovPolygon(dev.lat, dev.lng, dev.outerRange, dev.azimuth, dev.fov)} pathOptions={{ color: '#eab308', fillColor: '#eab308', fillOpacity: 0.2, weight: 1 }} />
               )}
-
-              {/* 3. RADAR EXCLUSION ZONES (Double Rings) */}
               {!dev.isPolygon && dev.type.toUpperCase() === 'RADAR' && (
-                <>
-                  {/* Outer Coverage Ring */}
-                  <Circle center={[dev.lat, dev.lng]} radius={dev.outerRange} pathOptions={{ color: '#ef4444', fillOpacity: 0.05, weight: 1, dashArray: "5, 5" }} />
-                  {/* Inner Exclusion Ring */}
-                  <Circle center={[dev.lat, dev.lng]} radius={dev.innerRange} pathOptions={{ color: '#ef4444', fillOpacity: 0.0, weight: 2 }} />
-                </>
+                <><Circle center={[dev.lat, dev.lng]} radius={dev.outerRange} pathOptions={{ color: '#ef4444', fillOpacity: 0.05, weight: 1, dashArray: "5, 5" }} /><Circle center={[dev.lat, dev.lng]} radius={dev.innerRange} pathOptions={{ color: '#ef4444', fillOpacity: 0.0, weight: 2 }} /></>
               )}
-
-              {/* 4. THE HARDWARE PIN */}
-              {!dev.isPolygon && (
-                <CircleMarker 
-                  center={[dev.lat, dev.lng]} 
-                  radius={5} 
-                  pathOptions={{ 
-                    color: '#0f172a', // Dark border
-                    fillColor: dev.type.toUpperCase() === 'RADAR' ? '#ef4444' : dev.type.toUpperCase() === 'CAMERA' ? '#eab308' : '#22c55e', 
-                    fillOpacity: 1, weight: 2 
-                  }}
-                >
-                  <Popup className="font-mono text-xs">
-                    <strong className="block text-sm mb-1">{dev.id}</strong>
-                    Type: {dev.type}<br/>Range: {dev.innerRange}m - {dev.outerRange}m
-                  </Popup>
-                </CircleMarker>
+              {!dev.isPolygon && dev.type !== 'Environment' && (
+                <CircleMarker center={[dev.lat, dev.lng]} radius={5} pathOptions={{ color: '#0f172a', fillColor: dev.type.toUpperCase() === 'RADAR' ? '#ef4444' : '#eab308', fillOpacity: 1, weight: 2 }}><Popup className="font-mono text-xs"><strong className="block text-sm mb-1">{dev.id}</strong>Type: {dev.type}</Popup></CircleMarker>
               )}
             </React.Fragment>
           ))}
-
-          {/* PLOT LIVE ALERTS EXACTLY LIKE YOUR IMAGE */}
           {alerts && alerts.map((alert, idx) => {
-             // Radar=Red, Camera=Yellow, PIDS=Green
              const type = alert.sensor_type.toUpperCase();
              const pinColor = type === 'RADAR' ? '#dc2626' : type === 'CAMERA' ? '#facc15' : '#22c55e';
-
-             return (
-               <CircleMarker 
-                 key={`alert-${idx}`}
-                 center={[alert.latitude, alert.longitude]} 
-                 radius={6} 
-                 pathOptions={{ color: '#ffffff', fillColor: pinColor, fillOpacity: 1, weight: 1 }}
-               >
-                 <Popup className="font-mono text-xs">
-                   <strong className="block text-sm mb-1">{alert.sensor_type} ALERT</strong>
-                   Track ID: {alert.alert_id}<br/>
-                   Distance: {alert.distance_m}m
-                 </Popup>
-               </CircleMarker>
-             );
+             return (<CircleMarker key={`alert-${idx}`} center={[alert.latitude, alert.longitude]} radius={6} pathOptions={{ color: '#ffffff', fillColor: pinColor, fillOpacity: 1, weight: 1 }}><Popup className="font-mono text-xs"><strong className="block text-sm mb-1">{alert.sensor_type} ALERT</strong>Track ID: {alert.alert_id}</Popup></CircleMarker>);
           })}
         </MapContainer>
       </div>
@@ -591,73 +543,38 @@ const MapView = ({ devices, alerts }) => {
 // MODULE 5: REPORTS / EXPORT
 // ==========================================
 const ExportView = ({ completedRuns }) => {
-  const handleDownload = async (run) => {
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  const handleGenerate = async (run) => {
+    setIsGenerating(true);
     try {
-      const response = await fetch('http://127.0.0.1:8000/api/export', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scenarioName: run.scenarioName, devices: run.devices, alerts: run.alerts })
-      });
+      const response = await fetch('http://127.0.0.1:8000/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scenarioName: run.scenarioName, devices: run.devices, alerts: run.alerts }) });
       const data = await response.json();
-
       const kmlBlob = new Blob([data.kml_content], { type: 'application/vnd.google-earth.kml+xml' });
-      const kmlUrl = URL.createObjectURL(kmlBlob);
-      const link1 = document.createElement('a');
-      link1.href = kmlUrl; link1.download = `${run.scenarioName.replace(/\s+/g, '_')}_Output.kml`;
-      link1.click();
-
+      const link1 = document.createElement('a'); link1.href = URL.createObjectURL(kmlBlob); link1.download = `${run.scenarioName}_Output.kml`; link1.click();
       const csvBlob = new Blob([data.csv_content], { type: 'text/csv' });
-      const csvUrl = URL.createObjectURL(csvBlob);
-      const link2 = document.createElement('a');
-      link2.href = csvUrl;
-      link2.download = `${run.scenarioName.replace(/\s+/g, '_')}_Output.csv`;
-      link2.click();
-
-    } catch (err) {
-      alert("Failed to generate export files from backend.");
-    }
+      const link2 = document.createElement('a'); link2.href = URL.createObjectURL(csvBlob); link2.download = `${run.scenarioName}_Output.csv`; link2.click();
+    } catch (err) { alert("Failed to generate export files from backend."); }
+    setIsGenerating(false);
   };
 
   return (
     <div className="p-6 max-w-[1200px] mx-auto space-y-6">
-      <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-        <div>
-          <h2 className="text-2xl font-bold text-emerald-400 flex items-center space-x-2">
-            <FileOutput className="w-6 h-6" /> <span>Reports & Export</span>
-          </h2>
-          <p className="text-slate-400 text-sm mt-1">Download dynamic KML files containing accurate plotting of hardware and alerts.</p>
-        </div>
-      </div>
-
+      <div className="flex items-center justify-between border-b border-slate-800 pb-4"><div><h2 className="text-2xl font-bold text-emerald-400 flex items-center space-x-2"><FileOutput className="w-6 h-6" /> <span>Reports & Export</span></h2></div></div>
       <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden shadow-sm">
-        <div className="bg-slate-850 border-b border-slate-800 px-5 py-4">
-          <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center"><CheckCircle className="w-4 h-4 mr-2 text-cyan-400"/> Completed Simulation Runs ({completedRuns.length})</h3>
-        </div>
-        
+        <div className="bg-slate-850 border-b border-slate-800 px-5 py-4"><h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center"><CheckCircle className="w-4 h-4 mr-2 text-cyan-400"/> Completed Simulation Runs ({completedRuns.length})</h3></div>
         <div className="p-0 max-h-[500px] overflow-y-auto">
-          {completedRuns.length === 0 ? (
-            <div className="p-10 text-center text-slate-500 font-mono text-sm">
-              No simulations have been completed yet.<br/>Go to the Alert Generator to run a scenario.
-            </div>
-          ) : (
+          {completedRuns.length === 0 ? <div className="p-10 text-center text-slate-500 font-mono text-sm">No simulations have been completed yet.</div> : (
             <table className="w-full text-left text-sm whitespace-nowrap">
-              <thead className="bg-slate-950/50 text-slate-400 font-mono text-xs sticky top-0">
-                <tr>
-                  <th className="p-4">Simulation Timestamp</th>
-                  <th className="p-4">Mission Designation</th>
-                  <th className="p-4">Alerts Transmitted</th>
-                  <th className="p-4 text-right">Action</th>
-                </tr>
-              </thead>
+              <thead className="bg-slate-950/50 text-slate-400 font-mono text-xs sticky top-0"><tr><th className="p-4">Timestamp</th><th className="p-4">Designation</th><th className="p-4">Alerts Transmitted</th><th className="p-4 text-right">Action</th></tr></thead>
               <tbody className="divide-y divide-slate-800/50">
                 {completedRuns.map((run) => (
                   <tr key={run.id} className="hover:bg-slate-800/30">
-                    <td className="p-4 text-slate-300 font-mono text-xs">{run.timestamp}</td>
-                    <td className="p-4 font-bold text-emerald-400">{run.scenarioName}</td>
-                    <td className="p-4 text-slate-300 font-mono">{run.alertsGenerated} Packets</td>
+                    <td className="p-4 text-slate-300 font-mono text-xs">{run.timestamp}</td><td className="p-4 font-bold text-emerald-400">{run.scenarioName}</td><td className="p-4 text-slate-300 font-mono">{run.alertsGenerated} Packets</td>
                     <td className="p-4 text-right">
-                      <button onClick={() => handleDownload(run)} className="bg-slate-800 hover:bg-slate-700 text-white font-medium px-4 py-2 rounded transition-colors text-xs flex items-center ml-auto">
-                        <Download className="w-3 h-3 mr-2" /> DOWNLOAD KML
-                      </button>
+                        <button onClick={() => handleGenerate(run)} disabled={isGenerating} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold px-4 py-2 rounded transition-colors text-xs flex items-center ml-auto">
+                            <Download className="w-3 h-3 mr-2" /> {isGenerating ? "GENERATING..." : "GENERATE OUTPUT KML/CSV"}
+                        </button>
                     </td>
                   </tr>
                 ))}
@@ -671,21 +588,43 @@ const ExportView = ({ completedRuns }) => {
 };
 
 // ==========================================
-// MASTER APP (COMMAND CENTER)
+// MASTER APP
 // ==========================================
 export default function App() {
   const [currentView, setCurrentView] = useState('Device Configuration');
-
-  // THE GLOBAL STATE
+  const [dbStatus, setDbStatus] = useState('Checking...');
+  const [sensorSchemas, setSensorSchemas] = useState([]); 
   const [devices, setDevices] = useState([]);
-  const [scenario, setScenario] = useState({
-    name: 'Operation Alpha', activeDevices: [], udpIp: '127.0.0.1', udpPort: 5005
-  });
-  const [alertConfig, setAlertConfig] = useState({
-    totalAlerts: 10, minDelaySec: 0.1, maxDelaySec: 0.5
-  });
+  const [scenario, setScenario] = useState({ name: 'Operation Alpha', activeDevices: [], udpIp: '127.0.0.1', udpPort: 5005 });
+  const [alertConfig, setAlertConfig] = useState({ minDelaySec: 0.1, maxDelaySec: 0.5 });
   const [completedRuns, setCompletedRuns] = useState([]);
   const [activeAlerts, setActiveAlerts] = useState([]);
+
+  // ==========================================
+  // DB ONLY: FULL BOOT-UP SEQUENCE
+  // ==========================================
+  useEffect(() => {
+    // Health Check & Schema Fetch
+    fetch('http://127.0.0.1:8000/api/config/schemas')
+      .then(res => {
+          if (res.ok) { setDbStatus('CONNECTED'); return res.json(); }
+          throw new Error("Bad Response");
+      })
+      .then(data => { if(Array.isArray(data)) setSensorSchemas(data); })
+      .catch(e => setDbStatus('DISCONNECTED'));
+
+    fetch('http://127.0.0.1:8000/api/config/devices')
+      .then(res => res.json()).then(data => { if(Array.isArray(data)) setDevices(data); })
+      .catch(e => console.error("Devices empty"));
+      
+    fetch('http://127.0.0.1:8000/api/state/scenario')
+      .then(res => res.json()).then(data => { if(data && data.name) setScenario(data); })
+      .catch(e => console.error("Scenario empty"));
+      
+    fetch('http://127.0.0.1:8000/api/state/alerts')
+      .then(res => res.json()).then(data => { if(Array.isArray(data)) setActiveAlerts(data); })
+      .catch(e => console.error("Alerts empty"));
+  }, []);
 
   const menuItems = [
     { name: 'Device Configuration', icon: Settings },
@@ -698,40 +637,32 @@ export default function App() {
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100 font-sans selection:bg-cyan-900 overflow-hidden">
       <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 z-10 shadow-2xl">
-        <div className="h-16 border-b border-slate-800 flex items-center px-6">
-          <Shield className="w-6 h-6 text-emerald-400 mr-3" />
-          <span className="font-bold tracking-wider text-lg">SIMCORE <span className="text-xs text-slate-500">v2.5</span></span>
-        </div>
+        <div className="h-16 border-b border-slate-800 flex items-center px-6"><Shield className="w-6 h-6 text-emerald-400 mr-3" /><span className="font-bold tracking-wider text-lg">SIMCORE <span className="text-xs text-slate-500">v2.5</span></span></div>
         <nav className="flex-1 py-4 overflow-y-auto">
           <ul className="space-y-1">
             {menuItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = currentView === item.name;
-              return (
-                <li key={item.name}>
-                  <button onClick={() => setCurrentView(item.name)} className={`w-full flex items-center px-6 py-3 text-sm font-medium transition-colors ${isActive ? 'bg-cyan-950/30 text-cyan-400 border-r-2 border-cyan-400' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}>
-                    <Icon className={`w-4 h-4 mr-3 ${isActive ? 'text-cyan-400' : 'opacity-70'}`} /> {item.name}
-                  </button>
-                </li>
-              );
+              const Icon = item.icon; const isActive = currentView === item.name;
+              return (<li key={item.name}><button onClick={() => setCurrentView(item.name)} className={`w-full flex items-center px-6 py-3 text-sm font-medium transition-colors ${isActive ? 'bg-emerald-950/30 text-emerald-400 border-r-2 border-emerald-400' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}><Icon className={`w-4 h-4 mr-3 ${isActive ? 'text-emerald-400' : 'opacity-70'}`} /> {item.name}</button></li>);
             })}
           </ul>
         </nav>
       </aside>
-
       <main className="flex-1 flex flex-col relative overflow-hidden bg-slate-950">
         <header className="h-16 border-b border-slate-800 bg-slate-900/50 backdrop-blur px-6 flex items-center justify-between shrink-0">
           <h1 className="text-sm font-bold text-slate-300 uppercase tracking-widest">{currentView}</h1>
-          <div className="flex items-center space-x-2 px-3 py-1.5 rounded-md bg-slate-950 border border-slate-800 font-mono text-xs">
-            <span className="w-2 h-2 rounded-full bg-amber-500"></span><span className="text-slate-300">ENGINE: IDLE</span>
+          <div className="flex items-center space-x-4">
+            <div className={`flex items-center space-x-2 px-3 py-1.5 rounded-md border font-mono text-xs ${dbStatus === 'CONNECTED' ? 'bg-emerald-950 border-emerald-800 text-emerald-400' : 'bg-rose-950 border-rose-800 text-rose-400'}`}>
+                <span className={`w-2 h-2 rounded-full ${dbStatus === 'CONNECTED' ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
+                <span>DB: {dbStatus}</span>
+            </div>
+            <div className="flex items-center space-x-2 px-3 py-1.5 rounded-md bg-slate-950 border border-slate-800 font-mono text-xs"><span className="w-2 h-2 rounded-full bg-amber-500"></span><span className="text-slate-300">ENGINE: IDLE</span></div>
           </div>
         </header>
-
         <div className="flex-1 overflow-y-auto">
-          {currentView === 'Device Configuration' && <DeviceConfigView devices={devices} setDevices={setDevices} />}
+          {currentView === 'Device Configuration' && <DeviceConfigView devices={devices} setDevices={setDevices} sensorSchemas={sensorSchemas} setSensorSchemas={setSensorSchemas} />}
           {currentView === 'Scenario Builder' && <ScenarioBuilderView devices={devices} scenario={scenario} setScenario={setScenario} />}
           {currentView === 'Tactical Map' && <MapView devices={devices} alerts={activeAlerts} />}
-          {currentView === 'Alert Generator' && <AlertGeneratorView devices={devices} scenario={scenario} alertConfig={alertConfig} setAlertConfig={setAlertConfig} setCompletedRuns={setCompletedRuns} setActiveAlerts={setActiveAlerts} />}
+          {currentView === 'Alert Generator' && <AlertGeneratorView devices={devices} scenario={scenario} alertConfig={alertConfig} setAlertConfig={setAlertConfig} setCompletedRuns={setCompletedRuns} setActiveAlerts={setActiveAlerts} sensorSchemas={sensorSchemas} />}
           {currentView === 'Reports / Export' && <ExportView completedRuns={completedRuns} />}
         </div>
       </main>
