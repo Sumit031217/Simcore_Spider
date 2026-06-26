@@ -89,15 +89,16 @@ def determine_priority(distance):
     return "LOW"
 
 # ==========================================================
-# MAGIC DYNAMIC PACKET BUILDER
+# MAGIC DYNAMIC PACKET BUILDER (Fault Tolerant)
 # ==========================================================
 def build_dynamic_packet(alert, device, track_id, schema, separator):
+    clean_type = device.type.upper()
     if not schema:
         clean_id = device.id.replace("RADAR_", "").replace("CAM_", "").replace("PIDS_", "")
-        if device.type.upper() == "PIDS":
+        if "PIDS" in clean_type:
             packet = [clean_id, 25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1112, 0, 0, 0, 0, 0, track_id, 0]
             return ",".join(map(str, packet))
-        elif device.type.upper() == "CAMERA":
+        elif "CAM" in clean_type:
             packet = [clean_id, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "Intrusion", 0, 0, 0]
             return ",".join(map(str, packet))
         else: 
@@ -118,7 +119,7 @@ def build_dynamic_packet(alert, device, track_id, schema, separator):
         val = 0 
         
         if 'deviceid' in fname or 'sensorid' in fname: val = device.id.replace("RADAR_", "").replace("CAM_", "").replace("PIDS_", "")
-        elif 'devicetype' in fname or 'sensortype' in fname: val = 9 if device.type.lower() == "radar" else 10 if device.type.lower() == "camera" else 11
+        elif 'devicetype' in fname or 'sensortype' in fname: val = 9 if "RADAR" in clean_type else 10 if "CAM" in clean_type else 11
         elif 'devicelat' in fname or ('lat' in fname and 'target' not in fname): val = round(device.lat, 6)
         elif 'devicelong' in fname or 'devicelng' in fname or ('lon' in fname and 'target' not in fname): val = round(device.lng, 6)
         elif 'targetlat' in fname or 'alertlat' in fname: val = round(alert['latitude'], 8)
@@ -145,7 +146,9 @@ def build_dynamic_packet(alert, device, track_id, schema, separator):
 @app.post("/api/transmit")
 async def calculate_and_transmit(payload: TransmitRequest):
     dev = payload.device
-    if dev.type.upper() == "PIDS" and dev.isPolygon and dev.polygon and len(dev.polygon) > 1:
+    clean_type = dev.type.upper()
+    
+    if "PIDS" in clean_type and dev.isPolygon and dev.polygon and len(dev.polygon) > 1:
         idx = random.randint(0, len(dev.polygon) - 1)
         p1 = dev.polygon[idx]; p2 = dev.polygon[(idx + 1) % len(dev.polygon)]
         fraction = random.uniform(0, 1)
@@ -159,13 +162,13 @@ async def calculate_and_transmit(payload: TransmitRequest):
         priority = "HIGH"
     else:
         distance = generate_uniform_distance(dev.innerRange, dev.outerRange)
-        bearing = random.uniform(dev.azimuth - (dev.fov / 2), dev.azimuth + (dev.fov / 2)) % 360 if dev.type.lower() == "camera" else random.uniform(0, 360)
+        bearing = random.uniform(dev.azimuth - (dev.fov / 2), dev.azimuth + (dev.fov / 2)) % 360 if "CAM" in clean_type else random.uniform(0, 360)
         destination = geodesic(meters=distance).destination((dev.lat, dev.lng), bearing)
         alert_lat = round(destination.latitude, 8); alert_lng = round(destination.longitude, 8)
         priority = determine_priority(distance)
 
     alert_data = {
-        "sensor_type": dev.type.upper(), "sensor_name": dev.id, "alert_id": payload.trackId,
+        "sensor_type": clean_type, "sensor_name": dev.id, "alert_id": payload.trackId,
         "priority": priority, "latitude": alert_lat, "longitude": alert_lng,
         "distance_m": round(distance, 2), "bearing": round(bearing, 2), "timestamp": datetime.now(timezone.utc).isoformat()
     }
@@ -184,14 +187,16 @@ async def generate_exports(payload: ExportRequest):
     
     kml = f'<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document>\n    <name>{payload.scenarioName} Report</name>\n    <Style id="radarStyle"><IconStyle><color>ff0000ff</color><scale>1.4</scale></IconStyle></Style>\n    <Style id="cameraStyle"><IconStyle><color>ffff0000</color><scale>1.4</scale></IconStyle></Style>\n    <Style id="radarHighStyle"><IconStyle><color>ff0000ff</color><scale>1.2</scale></IconStyle></Style>\n    <Style id="radarMediumStyle"><IconStyle><color>ff00ffff</color><scale>1.2</scale></IconStyle></Style>\n    <Style id="radarLowStyle"><IconStyle><color>ff00ff00</color><scale>1.2</scale></IconStyle></Style>\n    <Style id="cameraHighStyle"><IconStyle><color>ffffffff</color><scale>1.2</scale></IconStyle></Style>\n    <Style id="cameraMediumStyle"><IconStyle><color>ffffffff</color><scale>1.2</scale></IconStyle></Style>\n    <Style id="cameraLowStyle"><IconStyle><color>ffffffff</color><scale>1.2</scale></IconStyle></Style>\n    <Style id="pidsAlertStyle"><IconStyle><color>ffffff00</color><scale>1.3</scale></IconStyle></Style>\n    <Style id="envStyle"><IconStyle><color>ff00ff00</color><scale>1.0</scale></IconStyle></Style>\n'
     for dev in payload.devices:
-        if dev.type.lower() == "environment": kml += f'<Placemark><name>{dev.id}</name><styleUrl>#envStyle</styleUrl><Point><coordinates>{dev.lng},{dev.lat},0</coordinates></Point></Placemark>'
+        clean_type = dev.type.upper()
+        if "ENV" in clean_type: 
+            kml += f'<Placemark><name>{dev.id}</name><styleUrl>#envStyle</styleUrl><Point><coordinates>{dev.lng},{dev.lat},0</coordinates></Point></Placemark>'
         elif dev.isPolygon and dev.polygon:
             perimeter_coords = " ".join([f"{pt[1]},{pt[0]},0" for pt in dev.polygon]) + f" {dev.polygon[0][1]},{dev.polygon[0][0]},0"
             kml += f'<Placemark><name>{dev.id} Boundary</name><Style><LineStyle><color>ff0000ff</color><width>3</width></LineStyle><PolyStyle><color>440000ff</color></PolyStyle></Style><Polygon><outerBoundaryIs><LinearRing><coordinates>{perimeter_coords}</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>'
         else:
-            style = "#radarStyle" if dev.type.lower() == "radar" else "#cameraStyle"
+            style = "#radarStyle" if "RADAR" in clean_type else "#cameraStyle"
             kml += f'<Placemark><name>{dev.id}</name><styleUrl>{style}</styleUrl><Point><coordinates>{dev.lng},{dev.lat},0</coordinates></Point></Placemark>'
-            if dev.type.lower() == "camera":
+            if "CAM" in clean_type:
                 start_bearing, end_bearing = (dev.azimuth - (dev.fov / 2)) % 360, (dev.azimuth + (dev.fov / 2)) % 360
                 arc_points = []
                 angle = start_bearing
@@ -201,7 +206,7 @@ async def generate_exports(payload: ExportRequest):
                     angle = (angle + 2) % 360
                     if abs((angle - end_bearing + 360) % 360) < 2: break
                 kml += f'<Placemark><name>{dev.id} FOV</name><Style><LineStyle><color>66ff0000</color><width>1</width></LineStyle><PolyStyle><color>2200ff00</color></PolyStyle></Style><Polygon><outerBoundaryIs><LinearRing><coordinates>{dev.lng},{dev.lat},0 {" ".join(arc_points)} {dev.lng},{dev.lat},0</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>'
-            elif dev.type.lower() == "radar":
+            elif "RADAR" in clean_type:
                 outer_pts, inner_pts = [], []
                 for angle in range(361):
                     opt = geodesic(meters=dev.outerRange).destination((dev.lat, dev.lng), angle)
@@ -211,8 +216,9 @@ async def generate_exports(payload: ExportRequest):
                 kml += f'<Placemark><name>{dev.id} Boundary</name><LineString><coordinates>{" ".join(outer_pts)}</coordinates></LineString></Placemark><Placemark><name>{dev.id} Exclusion</name><LineString><coordinates>{" ".join(inner_pts)}</coordinates></LineString></Placemark>'
 
     for alert in payload.alerts:
-        if alert["sensor_type"] == "RADAR": style = "#radarHighStyle" if alert["priority"] == "HIGH" else "#radarMediumStyle" if alert["priority"] == "MEDIUM" else "#radarLowStyle"
-        elif alert["sensor_type"] == "PIDS": style = "#pidsAlertStyle"
+        clean_type = alert["sensor_type"].upper()
+        if "RADAR" in clean_type: style = "#radarHighStyle" if alert["priority"] == "HIGH" else "#radarMediumStyle" if alert["priority"] == "MEDIUM" else "#radarLowStyle"
+        elif "PIDS" in clean_type: style = "#pidsAlertStyle"
         else: style = "#cameraHighStyle" if alert["priority"] == "HIGH" else "#cameraMediumStyle" if alert["priority"] == "MEDIUM" else "#cameraLowStyle"
         kml += f'<Placemark><name>{alert["sensor_name"]}_{alert["alert_id"]}</name><description>Priority: {alert["priority"]}\nDistance: {alert["distance_m"]}m\nTimestamp: {alert["timestamp"]}</description><styleUrl>{style}</styleUrl><Point><coordinates>{alert["longitude"]},{alert["latitude"]},0</coordinates></Point></Placemark>'
     kml += "\n</Document>\n</kml>"
@@ -412,11 +418,10 @@ def clear_active_alerts(db: Session = Depends(get_db)):
     return {"status": "success"}
 
 # ==========================================================
-# TELEMETRY LOG PERSISTENCE (NEW)
+# TELEMETRY LOG PERSISTENCE
 # ==========================================================
 @app.get("/api/state/logs")
 def get_telemetry_logs(db: Session = Depends(get_db)):
-    # Returns in reverse ID order, so [0] is the newest log (matches React state)
     logs = db.query(TelemetryLogDB).order_by(TelemetryLogDB.id.desc()).all()
     return [{"time": l.time, "msg": l.msg, "type": l.type} for l in logs]
 
