@@ -8,9 +8,6 @@ import {
 import { MapContainer, TileLayer, Popup, CircleMarker, Circle, Polygon as LeafletPolygon } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// ==========================================
-// GEOMETRY ENGINE
-// ==========================================
 const getCameraFovPolygon = (lat, lng, radiusMeters, azimuth, fov) => {
   const R = 6371000;
   const centerLat = lat * (Math.PI / 180);
@@ -28,9 +25,6 @@ const getCameraFovPolygon = (lat, lng, radiusMeters, azimuth, fov) => {
   return points;
 };
 
-// ==========================================
-// MODULE 1: DEVICE CONFIGURATION
-// ==========================================
 const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas }) => {
   const [status, setStatus] = useState({ message: 'System Ready', type: 'info' });
 
@@ -85,9 +79,7 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
         const dataArray = Array.isArray(data) ? data : [data];
 
         const isValidFormat = dataArray.every(d => d.SensorId && d.SensorType && d.geometry);
-        if (!isValidFormat) {
-            throw new Error("Missing required fields. Each object must have a SensorId, SensorType, and geometry.");
-        }
+        if (!isValidFormat) throw new Error("Missing required fields. Each object must have a SensorId, SensorType, and geometry.");
 
         const parsedSensors = dataArray.map(d => {
           let lng = 0, lat = 0, isPolygon = false, polygonArr = [];
@@ -115,12 +107,9 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
             alertCount: parseInt(d.AlertCount || 0), packetChoice: d.PacketChoice || "", lat, lng, isPolygon, polygon: polygonArr
           };
         });
-        
         setDevices(prev => [...prev, ...parsedSensors]);
         setStatus({ message: `Loaded ${parsedSensors.length} Sensors. Please click 'Save to DB'.`, type: 'info' });
-      } catch (err) { 
-        alert(`🚨 FORMAT ERROR!\n\nThe Sensor Array file was rejected.\nDetails: ${err.message}`);
-      }
+      } catch (err) { alert(`🚨 FORMAT ERROR!\n\nThe Sensor Array file was rejected.\nDetails: ${err.message}`); }
     };
     reader.readAsText(file);
   };
@@ -133,11 +122,8 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
       try {
         const parsedData = JSON.parse(e.target.result);
         const dataArray = Array.isArray(parsedData) ? parsedData : [parsedData];
-        
         const isValid = dataArray.every(item => item.protocolName && Array.isArray(item.fields));
-        if (!isValid) {
-            throw new Error("Missing 'protocolName' or 'fields' array. This is not a valid packet format schema.");
-        }
+        if (!isValid) throw new Error("Missing 'protocolName' or 'fields' array. This is not a valid packet format schema.");
 
         const schemasToAdd = dataArray.map(item => ({
             name: item.protocolName.toUpperCase(),
@@ -145,12 +131,9 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
             totalIndexes: item.fields.length,
             schema: item.fields
         }));
-        
         setSensorSchemas(prev => [...prev, ...schemasToAdd]);
         setStatus({ message: `Loaded ${schemasToAdd.length} Protocol Schemas. Please click 'Save to DB'.`, type: 'info' });
-      } catch (err) { 
-        alert(`🚨 SCHEMA ERROR!\n\nYour Packet Format JSON was rejected.\nDetails: ${err.message}`);
-      }
+      } catch (err) { alert(`🚨 SCHEMA ERROR!\n\nYour Packet Format JSON was rejected.\nDetails: ${err.message}`); }
     };
     reader.readAsText(file);
   };
@@ -175,12 +158,9 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
             });
           }
         });
-        
         setDevices(prev => [...prev, ...parsedEnvironment]);
         setStatus({ message: `Loaded ${parsedEnvironment.length} Static Markers. Please click 'Save to DB'.`, type: 'info' });
-      } catch (err) { 
-        alert("🚨 KML SYNTAX ERROR!");
-      }
+      } catch (err) { alert("🚨 KML SYNTAX ERROR!"); }
     };
     reader.readAsText(file);
   };
@@ -198,52 +178,37 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
   return (
     <div className="p-6 max-w-[1600px] mx-auto space-y-6">
       <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-        <div>
-          <h2 className="text-2xl font-bold text-emerald-400 flex items-center space-x-2"><Settings className="w-6 h-6" /> <span>Device Configuration</span></h2>
-          <p className="text-slate-400 text-sm mt-1">Upload files to memory, then permanently lock them into PostgreSQL.</p>
-        </div>
+        <div><h2 className="text-2xl font-bold text-emerald-400 flex items-center space-x-2"><Settings className="w-6 h-6" /> <span>Device Configuration</span></h2></div>
         <div className={`px-4 py-2 rounded font-mono text-xs font-bold border ${status.type === 'error' ? 'bg-rose-950/50 border-rose-800 text-rose-400' : 'bg-emerald-950/50 border-emerald-800 text-emerald-400'}`}>{status.message}</div>
       </div>
-
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-sm">
           <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center"><Target className="w-4 h-4 mr-2 text-rose-400"/> Sensor Array Input</h3>
           <div className="border-2 border-dashed border-slate-700 rounded-lg p-6 text-center hover:bg-slate-800/50 transition-colors relative">
             <input type="file" accept=".json" onClick={(e) => { e.target.value = null; }} onChange={handleSensorJsonUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-            <Server className="w-8 h-8 text-slate-500 mx-auto mb-2" />
-            <p className="text-sm font-bold text-slate-300">Upload JSON File</p>
-            <p className="text-xs text-slate-500 mt-1">Parses Points and WKT Polygons</p>
+            <Server className="w-8 h-8 text-slate-500 mx-auto mb-2" /><p className="text-sm font-bold text-slate-300">Upload JSON File</p>
           </div>
         </div>
-
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-sm">
           <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center"><Settings className="w-4 h-4 mr-2 text-fuchsia-400"/> Packet Format Input</h3>
           <div className="border-2 border-dashed border-slate-700 rounded-lg p-6 text-center hover:bg-slate-800/50 transition-colors relative">
             <input type="file" accept=".json" onClick={(e) => { e.target.value = null; }} onChange={handleSchemaUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-            <Server className="w-8 h-8 text-slate-500 mx-auto mb-2" />
-            <p className="text-sm font-bold text-slate-300">Upload JSON Schema</p>
-            <p className="text-xs text-slate-500 mt-1">Accepts multiple format objects</p>
+            <Server className="w-8 h-8 text-slate-500 mx-auto mb-2" /><p className="text-sm font-bold text-slate-300">Upload JSON Schema</p>
           </div>
         </div>
-
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-sm">
           <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center"><MapPin className="w-4 h-4 mr-2 text-emerald-400"/> Environment Input</h3>
           <div className="border-2 border-dashed border-slate-700 rounded-lg p-6 text-center hover:bg-slate-800/50 transition-colors relative">
             <input type="file" accept=".kml" onClick={(e) => { e.target.value = null; }} onChange={handleEnvironmentKmlUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-            <MapPin className="w-8 h-8 text-slate-500 mx-auto mb-2" />
-            <p className="text-sm font-bold text-slate-300">Upload KML File</p>
-            <p className="text-xs text-slate-500 mt-1">Static Buildings, Trees, Towers</p>
+            <MapPin className="w-8 h-8 text-slate-500 mx-auto mb-2" /><p className="text-sm font-bold text-slate-300">Upload KML File</p>
           </div>
         </div>
       </div>
-
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mt-6">
         <div className="xl:col-span-2 bg-slate-900 border border-slate-800 rounded-lg flex flex-col overflow-hidden shadow-sm h-[400px]">
           <div className="bg-slate-850 border-b border-slate-800 px-5 py-4 flex justify-between items-center">
             <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center"><Server className="w-4 h-4 mr-2 text-indigo-400"/> Deployed Entities ({devices.length})</h3>
-            <button onClick={syncDevicesToDB} className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 px-4 rounded text-xs flex items-center shadow-lg">
-              <Save className="w-4 h-4 mr-2" /> SAVE SENSORS TO DB
-            </button>
+            <button onClick={syncDevicesToDB} className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 px-4 rounded text-xs flex items-center shadow-lg"><Save className="w-4 h-4 mr-2" /> SAVE SENSORS TO DB</button>
           </div>
           <div className="flex-1 overflow-auto p-0">
             {devices.length === 0 ? <div className="h-full flex flex-col items-center justify-center text-slate-600 font-mono text-sm">No hardware or environment loaded.</div> : (
@@ -253,7 +218,6 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
                   {devices.map((dev, idx) => {
                     const hasPacketChoice = !!dev.packetChoice;
                     const isMissingPacket = hasPacketChoice && !sensorSchemas.some(s => s.name.toUpperCase() === dev.packetChoice.toUpperCase());
-                    
                     return (
                       <tr key={idx} className="hover:bg-slate-800/30">
                         <td className="p-3">
@@ -274,13 +238,10 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
             )}
           </div>
         </div>
-
         <div className="bg-slate-900 border border-slate-800 rounded-lg flex flex-col overflow-hidden shadow-sm h-[400px]">
           <div className="bg-slate-850 border-b border-slate-800 px-5 py-4 flex justify-between items-center">
             <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center"><Settings className="w-4 h-4 mr-2 text-fuchsia-400"/> Packet Formats ({sensorSchemas.length})</h3>
-            <button onClick={syncSchemasToDB} className="bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-bold py-1.5 px-4 rounded text-xs flex items-center shadow-lg">
-              <Save className="w-4 h-4 mr-2" /> SAVE FORMATS TO DB
-            </button>
+            <button onClick={syncSchemasToDB} className="bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-bold py-1.5 px-4 rounded text-xs flex items-center shadow-lg"><Save className="w-4 h-4 mr-2" /> SAVE FORMATS TO DB</button>
           </div>
           <div className="flex-1 overflow-auto">
             {sensorSchemas.length === 0 ? <div className="p-10 text-center text-slate-500 font-mono text-xs">No schemas loaded.</div> : (
@@ -330,43 +291,28 @@ const ScenarioBuilderView = ({ scenario, setScenario, devices, sensorSchemas }) 
   const handleSave = async (e) => {
     e.preventDefault();
     if(scenario.activeDevices.length === 0) return alert("You must select at least one active sensor!");
-    
     try {
-        const response = await fetch('http://127.0.0.1:8000/api/state/scenario', { 
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(scenario) 
-        });
+        const response = await fetch('http://127.0.0.1:8000/api/state/scenario', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(scenario) });
         if (response.ok) {
             setStatus('Scenario compiled and State Saved to Database.');
             setTimeout(() => setStatus(''), 4000);
-        } else {
-            const text = await response.text();
-            alert("❌ PYTHON REJECTED SCENARIO:\n" + text);
         }
-    } catch (err) {
-        alert("🚨 NETWORK CRASH:\nThe browser blocked the connection to Python.\n" + err.message);
-    }
+    } catch (err) { alert("🚨 NETWORK CRASH:\nThe browser blocked the connection to Python.\n" + err.message); }
   };
 
   return (
     <div className="p-6 max-w-[1200px] mx-auto space-y-6">
       <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-        <div>
-          <h2 className="text-2xl font-bold text-indigo-400 flex items-center space-x-2"><Sliders className="w-6 h-6" /> <span>Scenario Builder</span></h2>
-          <p className="text-slate-400 text-sm mt-1">Bind active sensors to your mission. Checkboxes and Target IP are auto-saved.</p>
-        </div>
+        <div><h2 className="text-2xl font-bold text-indigo-400 flex items-center space-x-2"><Sliders className="w-6 h-6" /> <span>Scenario Builder</span></h2></div>
         <span className="text-emerald-400 text-sm font-mono font-bold">{status && <><CheckCircle className="w-4 h-4 inline mr-2" />{status}</>}</span>
       </div>
-
       <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 shadow-sm md:col-span-2">
-          <div className="space-y-4">
-            <div>
-              <label className="block text-xs font-mono text-slate-500 mb-1 uppercase tracking-wider">Mission Designation (Scenario Name)</label>
-              <input type="text" name="name" required value={scenario.name} onChange={handleChange} className="w-full bg-slate-950 border border-slate-800 rounded px-4 py-3 text-white text-lg font-bold focus:border-indigo-500 focus:outline-none" />
-            </div>
+          <div>
+            <label className="block text-xs font-mono text-slate-500 mb-1 uppercase tracking-wider">Mission Designation (Scenario Name)</label>
+            <input type="text" name="name" required value={scenario.name} onChange={handleChange} className="w-full bg-slate-950 border border-slate-800 rounded px-4 py-3 text-white text-lg font-bold focus:border-indigo-500 focus:outline-none" />
           </div>
         </div>
-
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 shadow-sm">
           <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center border-b border-slate-800 pb-2"><CheckSquare className="w-4 h-4 mr-2 text-amber-400"/> Hardware Binding</h3>
           <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
@@ -380,7 +326,6 @@ const ScenarioBuilderView = ({ scenario, setScenario, devices, sensorSchemas }) 
             )}
           </div>
         </div>
-
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 shadow-sm">
           <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center border-b border-slate-800 pb-2"><Network className="w-4 h-4 mr-2 text-cyan-400"/> Target Routing</h3>
           <div className="grid grid-cols-1 gap-4">
@@ -388,7 +333,6 @@ const ScenarioBuilderView = ({ scenario, setScenario, devices, sensorSchemas }) 
             <div><label className="block text-xs font-mono text-slate-500 mb-1">Target UDP Port</label><input type="number" name="udpPort" value={scenario.udpPort} onChange={handleChange} className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-cyan-400 font-mono" /></div>
           </div>
         </div>
-
         <div className="md:col-span-2 flex justify-end"><button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-8 py-3 rounded text-sm shadow-lg"><Save className="w-4 h-4 inline mr-2" />SAVE SCENARIO ARCHITECTURE</button></div>
       </form>
     </div>
@@ -423,28 +367,16 @@ const AlertGeneratorView = ({
       </div>
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <div className="space-y-6">
-          
           <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 shadow-sm">
-            <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center border-b border-slate-800 pb-2">
-              <Target className="w-4 h-4 mr-2 text-rose-400"/> Payload Overrides
-            </h3>
+            <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center border-b border-slate-800 pb-2"><Target className="w-4 h-4 mr-2 text-rose-400"/> Payload Overrides</h3>
             <div className="space-y-2 max-h-48 overflow-y-auto pr-2 mb-5">
               {activeFleet.length === 0 ? (
                  <div className="text-xs font-mono text-slate-500 bg-slate-950 p-3 rounded border border-slate-800">No active sensors bound in scenario.</div>
               ) : (
                  activeFleet.map(dev => (
                    <div key={dev.id} className="flex items-center justify-between bg-slate-950 border border-slate-800 p-2 rounded">
-                     <div>
-                       <span className="text-sm font-bold text-slate-300">{dev.id}</span>
-                       <span className="text-[10px] text-slate-500 ml-2 uppercase">({dev.type})</span>
-                     </div>
-                     <input
-                       type="number" min="0"
-                       value={getAlertCount(dev)}
-                       onChange={(e) => handleCountOverride(dev.id, e.target.value)}
-                       disabled={simIsRunning}
-                       className="w-16 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-rose-400 font-mono text-center text-sm disabled:opacity-50 focus:border-rose-500 focus:outline-none"
-                     />
+                     <div><span className="text-sm font-bold text-slate-300">{dev.id}</span><span className="text-[10px] text-slate-500 ml-2 uppercase">({dev.type})</span></div>
+                     <input type="number" min="0" value={getAlertCount(dev)} onChange={(e) => handleCountOverride(dev.id, e.target.value)} disabled={simIsRunning} className="w-20 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-rose-400 font-mono text-center text-sm disabled:opacity-50 focus:border-rose-500 focus:outline-none" />
                    </div>
                  ))
               )}
@@ -461,8 +393,8 @@ const AlertGeneratorView = ({
               <div>
                 <label className="block text-xs font-mono text-slate-500 mb-1 flex items-center"><Clock className="w-3 h-3 mr-1 text-amber-400"/> Timing Physics (Seconds)</label>
                 <div className="grid grid-cols-2 gap-3">
-                  <input type="number" step="0.1" name="minDelaySec" value={alertConfig.minDelaySec} onChange={handleChange} disabled={simIsRunning} placeholder="Min" className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-amber-400 font-mono disabled:opacity-50 focus:border-amber-500 focus:outline-none" />
-                  <input type="number" step="0.1" name="maxDelaySec" value={alertConfig.maxDelaySec} onChange={handleChange} disabled={simIsRunning} placeholder="Max" className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-amber-400 font-mono disabled:opacity-50 focus:border-amber-500 focus:outline-none" />
+                  <input type="number" step="0.0001" name="minDelaySec" value={alertConfig.minDelaySec} onChange={handleChange} disabled={simIsRunning} placeholder="Min" className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-amber-400 font-mono disabled:opacity-50 focus:border-amber-500 focus:outline-none" />
+                  <input type="number" step="0.0001" name="maxDelaySec" value={alertConfig.maxDelaySec} onChange={handleChange} disabled={simIsRunning} placeholder="Max" className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-amber-400 font-mono disabled:opacity-50 focus:border-amber-500 focus:outline-none" />
                 </div>
               </div>
             </div>
@@ -488,19 +420,47 @@ const AlertGeneratorView = ({
 };
 
 // ==========================================
-// VIEW 4: TACTICAL MAP
+// VIEW 4: TACTICAL MAP (WITH FIFO SLIDING WINDOW & SHOW ALL BUTTON)
 // ==========================================
-const MapView = ({ devices, alerts }) => {
+const MapView = ({ devices, alerts, simIsRunning }) => {
   const mapCenter = devices.length > 0 && devices[0].lat ? [devices[0].lat, devices[0].lng] : [19.2813, 72.8693];
+  const [showAll, setShowAll] = useState(false);
+
+  // Auto-reset back to safety cap when a new simulation starts
+  useEffect(() => {
+    if (simIsRunning) setShowAll(false);
+  }, [simIsRunning]);
+
+  // FIFO QUEUE: Strictly slice the last 1000 items to protect browser memory
+  const displayedAlerts = showAll ? alerts : alerts.slice(-1000);
 
   return (
-    <div className="p-6 space-y-6 max-w-[1600px] mx-auto h-[calc(100vh-4rem)] flex flex-col font-sans">
+    <div className="p-6 space-y-6 max-w-[1600px] mx-auto h-[calc(100vh-4rem)] flex flex-col font-sans relative">
       <div className="border-b border-slate-800 pb-4 flex items-center justify-between">
         <div><h2 className="text-xl font-bold text-white flex items-center space-x-2"><Globe className="w-6 h-6 text-cyan-400" /><span>Tactical Map Visualizer</span></h2></div>
-        <div className="flex space-x-3"><div className="flex items-center space-x-2 bg-rose-950/40 border border-rose-900 rounded px-3 py-1"><Target className="w-4 h-4 text-rose-500" /><span className="text-xs font-mono text-rose-400 font-bold">ACTIVE THREATS: {alerts ? alerts.length : 0}</span></div></div>
+        <div className="flex space-x-3">
+            <div className="flex items-center space-x-2 bg-rose-950/40 border border-rose-900 rounded px-3 py-1">
+                <Target className="w-4 h-4 text-rose-500" />
+                <span className="text-xs font-mono text-rose-400 font-bold">ACTIVE THREATS: {displayedAlerts ? displayedAlerts.length : 0}</span>
+            </div>
+        </div>
       </div>
+
       <div className="flex-1 rounded-xl overflow-hidden border border-slate-300 shadow-2xl relative z-0">
-        <MapContainer key={mapCenter.join(',')} center={mapCenter} zoom={14} className="h-full w-full" style={{ background: '#f8fafc' }}>
+        
+        {/* NEW SHOW ALL / FIFO CAP BUTTON */}
+        {alerts && alerts.length > 1000 && !simIsRunning && (
+            <div className="absolute top-4 right-4 z-[1000]">
+                <button 
+                    onClick={() => setShowAll(!showAll)}
+                    className={`font-bold py-2 px-4 rounded shadow-lg text-xs flex items-center transition-colors ${showAll ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-rose-600 hover:bg-rose-500 text-white'}`}
+                >
+                    {showAll ? 'SHOW LATEST 1000 ONLY' : `LOAD ALL ${alerts.length} ALERTS (MAY LAG)`}
+                </button>
+            </div>
+        )}
+
+        <MapContainer key={mapCenter.join(',')} center={mapCenter} zoom={14} className="h-full w-full" style={{ background: '#f8fafc' }} preferCanvas={true}>
           <TileLayer attribution='&copy; CartoDB' url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png" />
           {devices && devices.map((dev) => {
             const isEnv = dev.type.toUpperCase().includes('ENV');
@@ -527,7 +487,7 @@ const MapView = ({ devices, alerts }) => {
               </React.Fragment>
             );
           })}
-          {alerts && alerts.map((alert, idx) => {
+          {displayedAlerts && displayedAlerts.map((alert, idx) => {
              const type = alert.sensor_type.toUpperCase();
              const pinColor = type.includes('RADAR') ? '#dc2626' : type.includes('CAM') ? '#facc15' : '#22c55e';
              return (<CircleMarker key={`alert-${alert.alert_id}-${idx}`} center={[alert.latitude, alert.longitude]} radius={6} pathOptions={{ color: '#ffffff', fillColor: pinColor, fillOpacity: 1, weight: 1 }}><Popup className="font-mono text-xs"><strong className="block text-sm mb-1">{alert.sensor_type} ALERT</strong>Track ID: {alert.alert_id}</Popup></CircleMarker>);
@@ -657,14 +617,14 @@ export default function App() {
   const [sensorSchemas, setSensorSchemas] = useState([]); 
   const [devices, setDevices] = useState([]);
   const [scenario, setScenario] = useState({ name: 'Operation Alpha', activeDevices: [], udpIp: '127.0.0.1', udpPort: 5005 });
-  const [alertConfig, setAlertConfig] = useState({ minDelaySec: 0.1, maxDelaySec: 0.5 });
+  const [alertConfig, setAlertConfig] = useState({ minDelaySec: 0.0001, maxDelaySec: 0.0005 });
   const [completedRuns, setCompletedRuns] = useState([]);
   const [activeAlerts, setActiveAlerts] = useState([]);
   
   const [simIsRunning, setSimIsRunning] = useState(false);
   const [simProgress, setSimProgress] = useState(0);
   const [overrideCounts, setOverrideCounts] = useState({});
-  const engineRef = useRef({ isRunning: false, currentAlert: 0, targetTotalAlerts: 0, executionPool: [], generatedAlertsMemory: [], timeout: null });
+  const previousRunningState = useRef(false);
 
   const [simLogs, setSimLogs] = useState(() => {
     try {
@@ -696,96 +656,70 @@ export default function App() {
       
     fetch('http://127.0.0.1:8000/api/state/scenario')
       .then(res => res.json()).then(data => { if(data && data.name) setScenario(data); }).catch(e => console.error(e));
-      
+
     fetch('http://127.0.0.1:8000/api/state/alerts')
       .then(res => res.json()).then(data => { if(Array.isArray(data)) setActiveAlerts(data); }).catch(e => console.error(e));
 
     fetchHistory();
   }, []);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+        fetch('http://127.0.0.1:8000/api/engine/status')
+            .then(res => res.json())
+            .then(data => {
+                setSimIsRunning(data.is_running);
+                setSimProgress(data.total > 0 ? Math.floor((data.progress / data.total) * 100) : 0);
+                
+                if (data.is_running) {
+                    setSimLogs(data.logs || []);
+                    setActiveAlerts(data.map_alerts || []);
+                }
+                
+                if (previousRunningState.current === true && data.is_running === false) {
+                    fetchHistory();
+                    fetch('http://127.0.0.1:8000/api/state/alerts')
+                        .then(r => r.json())
+                        .then(alerts => setActiveAlerts(alerts));
+                }
+                previousRunningState.current = data.is_running;
+            })
+            .catch(() => {});
+    }, 800); 
+    
+    return () => clearInterval(interval);
+  }, []);
+
   const startSimulation = async () => {
     const activeFleet = devices.filter(d => scenario.activeDevices.includes(d.id));
-    const environmentFleet = devices.filter(d => d.type === 'Environment');
+    const environmentFleet = devices.filter(d => d.type.toUpperCase().includes('ENV'));
     const targetTotalAlerts = activeFleet.reduce((acc, dev) => acc + getAlertCount(dev), 0);
 
     if (activeFleet.length === 0) return alert("MISSION ABORT: No active sensors bound.");
     if (targetTotalAlerts <= 0) return alert("MISSION ABORT: Target payload is 0.");
 
-    try {
-        await fetch('http://127.0.0.1:8000/api/state/alerts', { method: 'DELETE' });
-    } catch (e) {
-        console.error("Warning: Could not connect to DB for cleanup.");
-    }
-
-    let pool = [];
-    activeFleet.forEach(dev => { 
-        const count = getAlertCount(dev);
-        for(let i = 0; i < count; i++) { pool.push(dev); } 
-    });
-    pool = pool.sort(() => Math.random() - 0.5);
-
-    engineRef.current = { isRunning: true, currentAlert: 0, targetTotalAlerts, executionPool: pool, generatedAlertsMemory: [], timeout: null };
-    setSimIsRunning(true);
-    setSimProgress(0);
-    setActiveAlerts([]);
-    
-    setSimLogs([{ time: new Date().toLocaleTimeString(), msg: `SYSTEM: Engaging '${scenario.name}'. UDP Engine Active.`, type: 'info' }]);
-
-    const runTick = async () => {
-      if (!engineRef.current.isRunning) return;
-
-      if (engineRef.current.currentAlert >= engineRef.current.targetTotalAlerts) {
-        setSimIsRunning(false);
-        engineRef.current.isRunning = false;
-        setSimLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `SYSTEM: Transmission Complete. ${engineRef.current.targetTotalAlerts} packets sent.`, type: 'info' }, ...prev]);
-        
-        try {
-          setSimLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `DATABASE: Committing payload...`, type: 'info' }, ...prev]);
-          const response = await fetch('http://127.0.0.1:8000/api/database/save', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ scenarioName: scenario.name, alerts: engineRef.current.generatedAlertsMemory, devices: activeFleet.concat(environmentFleet) })
-          });
-          const data = await response.json();
-          if (data.status === "success") {
-              setSimLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `DATABASE: ${data.message}`, type: 'success' }, ...prev]);
-              fetchHistory(); 
-          }
-        } catch (e) { setSimLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `DB ERROR: Postgres unreachable.`, type: 'error' }, ...prev]); }
-        return;
-      }
-
-      const dev = engineRef.current.executionPool[engineRef.current.currentAlert]; 
-      engineRef.current.currentAlert++;
-      const selectedSchema = sensorSchemas.find(s => s.name.toUpperCase() === (dev.packetChoice || "").toUpperCase()) || null;
-
-      try {
-        const response = await fetch('http://127.0.0.1:8000/api/transmit', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ targetIp: scenario.udpIp, targetPort: scenario.udpPort, trackId: engineRef.current.currentAlert, device: dev, customSchema: selectedSchema ? selectedSchema.schema : null, customSeparator: selectedSchema ? selectedSchema.separator : "," })
-        });
-        const result = await response.json();
-        if (result.status === "success" && engineRef.current.isRunning) {
-            engineRef.current.generatedAlertsMemory.push(result.alert_data);
-            setActiveAlerts(prev => [...prev, result.alert_data]);
-            fetch('http://127.0.0.1:8000/api/state/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(result.alert_data) }).catch(()=>{});
-            setSimLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `[${dev.id}] -> ${result.packet}`, type: 'success' }, ...prev]);
-        } else { setSimLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `[ERROR] Python: ${result.message}`, type: 'error' }, ...prev]); }
-      } catch (error) { if (engineRef.current.isRunning) setSimLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: `[ERROR] Engine Refused.`, type: 'error' }, ...prev]); }
-
-      if (engineRef.current.isRunning) {
-          setSimProgress(Math.floor((engineRef.current.currentAlert / engineRef.current.targetTotalAlerts) * 100));
-          const delay = Math.random() * (alertConfig.maxDelaySec - alertConfig.minDelaySec) + alertConfig.minDelaySec;
-          engineRef.current.timeout = setTimeout(runTick, delay * 1000);
-      }
+    const activeFleetWithOverrides = activeFleet.map(dev => ({ ...dev, alertCount: getAlertCount(dev) }));
+    const payload = {
+        scenarioName: scenario.name,
+        udpIp: scenario.udpIp,
+        udpPort: scenario.udpPort,
+        activeDevices: activeFleetWithOverrides,
+        environmentDevices: environmentFleet,
+        alertConfig: alertConfig,
+        sensorSchemas: sensorSchemas
     };
-    runTick();
+
+    try {
+        await fetch('http://127.0.0.1:8000/api/engine/start', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+        });
+    } catch (e) {
+        alert("Failed to start engine.");
+    }
   };
 
   const stopSimulation = () => {
-    clearTimeout(engineRef.current.timeout); 
-    engineRef.current.isRunning = false;
-    setSimIsRunning(false);
-    setSimLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: 'SYSTEM: Transmission Aborted.', type: 'error' }, ...prev]);
+    fetch('http://127.0.0.1:8000/api/engine/stop', { method: 'POST' });
   };
 
   const menuItems = [
@@ -823,7 +757,7 @@ export default function App() {
         <div className="flex-1 overflow-y-auto">
           {currentView === 'Device Configuration' && <DeviceConfigView devices={devices} setDevices={setDevices} sensorSchemas={sensorSchemas} setSensorSchemas={setSensorSchemas} />}
           {currentView === 'Scenario Builder' && <ScenarioBuilderView devices={devices} scenario={scenario} setScenario={setScenario} sensorSchemas={sensorSchemas} />}
-          {currentView === 'Tactical Map' && <MapView devices={devices} alerts={activeAlerts} />}
+          {currentView === 'Tactical Map' && <MapView devices={devices} alerts={activeAlerts} simIsRunning={simIsRunning} />}
           {currentView === 'Alert Generator' && <AlertGeneratorView devices={devices} scenario={scenario} alertConfig={alertConfig} setAlertConfig={setAlertConfig} setCompletedRuns={setCompletedRuns} setActiveAlerts={setActiveAlerts} sensorSchemas={sensorSchemas} simIsRunning={simIsRunning} simLogs={simLogs} simProgress={simProgress} startSimulation={startSimulation} stopSimulation={stopSimulation} overrideCounts={overrideCounts} setOverrideCounts={setOverrideCounts} getAlertCount={getAlertCount} />}
           {currentView === 'Reports / Export' && <ExportView completedRuns={completedRuns} />}
         </div>
