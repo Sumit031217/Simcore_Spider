@@ -42,13 +42,21 @@ except ModuleNotFoundError:
 try:
     Base.metadata.create_all(bind=engine)
     print("SUCCESS: Connected to PostgreSQL Database.")
-    with engine.begin() as conn:
+    
+    # [FIX] Use independent AUTOCOMMIT so existing columns don't block the new workspace columns
+    with engine.connect() as conn:
+        conn = conn.execution_options(isolation_level="AUTOCOMMIT")
         try: conn.execute(text("ALTER TABLE device_configs ADD COLUMN envcategory VARCHAR DEFAULT 'GENERAL';"))
         except: pass
         try: conn.execute(text("ALTER TABLE device_configs ADD COLUMN color VARCHAR DEFAULT '#3b82f6';"))
         except: pass
         try: conn.execute(text("ALTER TABLE device_configs ADD COLUMN sourcefile VARCHAR DEFAULT 'Uploaded KML';"))
         except: pass
+        try: conn.execute(text("ALTER TABLE device_configs ADD COLUMN workspace VARCHAR DEFAULT 'Default';"))
+        except: pass
+        try: conn.execute(text("ALTER TABLE scenario_state ADD COLUMN workspace VARCHAR DEFAULT 'Default';"))
+        except: pass
+
 except Exception as e:
     print("\nWARNING: Could not connect to PostgreSQL Database:", e)
 
@@ -86,6 +94,7 @@ class DeviceModel(BaseModel):
     envCategory: Optional[str] = "GENERAL"
     color: Optional[str] = "#3b82f6"
     sourceFile: Optional[str] = "Uploaded KML"
+    workspace: Optional[str] = "Default"
 
 class SchemaModel(BaseModel):
     name: str
@@ -98,14 +107,18 @@ class ScenarioModel(BaseModel):
     activeDevices: list
     udpIp: str
     udpPort: int
+    workspace: Optional[str] = "Default"
 
 class RangeExportRequest(BaseModel):
     startTime: str
     endTime: str
     reportName: Optional[str] = "Time_Range_Report"
 
+class DeleteBatchRequest(BaseModel):
+    ids: List[str]
+
 # ==========================================================
-# [SPEED OPTIMIZATION 1]: High-Performance Math (Replaces Slow Geopy)
+# MATH & PACKET GENERATION
 # ==========================================================
 def fast_destination(lat, lng, dist_m, bearing_deg):
     R = 6378137.0
@@ -123,9 +136,6 @@ def determine_priority(distance):
     if distance <= 3500: return "MEDIUM"
     return "LOW"
 
-# ==========================================================
-# [SPEED OPTIMIZATION 2]: Pre-Sorted Schemas
-# ==========================================================
 def build_dynamic_packet(alert, device, track_id, pre_sorted_schema, separator):
     clean_type = str(device.type).upper()
     if not pre_sorted_schema:
@@ -175,7 +185,7 @@ def build_dynamic_packet(alert, device, track_id, pre_sorted_schema, separator):
     return separator.join(packet)
 
 # ==========================================================
-# [SPEED OPTIMIZATION 3]: GEOS O(1) Spatial Indexing
+# SPATIAL ENGINE
 # ==========================================================
 def build_spatial_indices(env_devices):
     perimeters, buildings, vegetations, waterbodies, transport_lines = [], [], [], [], []
@@ -244,8 +254,7 @@ def simulation_worker(scenarioName, udpIp, udpPort, active_devices, env_devices,
     pool = []
     for dev in active_devices:
         count = int(dev.get('alertCount', 0))
-        for _ in range(count):
-            pool.append(dev)
+        for _ in range(count): pool.append(dev)
             
     random.shuffle(pool)
     total = len(pool)
@@ -262,10 +271,8 @@ def simulation_worker(scenarioName, udpIp, udpPort, active_devices, env_devices,
         with engine_lock: engine_state['is_running'] = False
         return
 
-    # Pre-calculate unified geometry indexes once!
     p_union, b_union, v_union, w_union, t_union = build_spatial_indices(env_devices)
     
-    # Pre-sort schemas to avoid doing it millions of times
     schema_cache = {}
     for s in schemas:
         schema_cache[str(s.get('name', '')).upper()] = {
@@ -319,16 +326,9 @@ def simulation_worker(scenarioName, udpIp, udpPort, active_devices, env_devices,
         track_id = idx + 1
         
         alert_data = {
-            "run_id": run_id,
-            "sensor_type": str(d_obj.type).upper(),
-            "sensor_name": d_obj.id,
-            "alert_id": track_id,
-            "priority": priority,
-            "latitude": alert_lat,
-            "longitude": alert_lng,
-            "distance_m": dist,
-            "bearing": bearing,
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            "run_id": run_id, "sensor_type": str(d_obj.type).upper(), "sensor_name": d_obj.id,
+            "alert_id": track_id, "priority": priority, "latitude": alert_lat, "longitude": alert_lng,
+            "distance_m": dist, "bearing": bearing, "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
         ui_alerts.append(alert_data)
@@ -339,8 +339,7 @@ def simulation_worker(scenarioName, udpIp, udpPort, active_devices, env_devices,
         sel_sep = cache_entry['separator'] if cache_entry else ","
 
         packet_string = build_dynamic_packet(alert_data, d_obj, track_id, sel_schema, sel_sep)
-        try:
-            udp_socket.sendto(packet_string.encode('utf-8'), (str(udpIp), int(udpPort)))
+        try: udp_socket.sendto(packet_string.encode('utf-8'), (str(udpIp), int(udpPort)))
         except Exception: pass
 
         if len(db_chunk) >= 5000:
@@ -360,7 +359,6 @@ def simulation_worker(scenarioName, udpIp, udpPort, active_devices, env_devices,
         if delay > 0: time.sleep(delay)
 
     udp_socket.close()
-
     if db_chunk:
         db.bulk_insert_mappings(AlertLog, db_chunk)
         db.commit()
@@ -423,7 +421,6 @@ def get_active_alerts(db: Session = Depends(get_db)):
         } for a in alerts_query]
     return []
 
-# Also optimize Export generation math to instantly build KMLs
 def compile_kml_and_csv(report_name: str, alerts: list, devices: list):
     csv_io = StringIO()
     writer = csv.writer(csv_io)
@@ -444,15 +441,11 @@ def compile_kml_and_csv(report_name: str, alerts: list, devices: list):
             hex_color = dev.get("color", "#888888").lstrip("#")
             kml_color = "ff" + hex_color[4:6] + hex_color[2:4] + hex_color[0:2]
             is_line = dev.get("envCategory") in ["ROAD", "RAILWAY"]
-            
             if len(polygon) >= 2:
                 coords_str = " ".join([f"{pt[1]},{pt[0]},0" for pt in polygon])
-                if is_line:
-                    kml += f'<Placemark><name>{dev_id}</name><Style><LineStyle><color>{kml_color}</color><width>2.5</width></LineStyle></Style><LineString><coordinates>{coords_str}</coordinates></LineString></Placemark>'
-                else:
-                    kml += f'<Placemark><name>{dev_id}</name><Style><LineStyle><color>{kml_color}</color><width>2.5</width></LineStyle><PolyStyle><color>66{kml_color[2:]}</color></PolyStyle></Style><Polygon><outerBoundaryIs><LinearRing><coordinates>{coords_str}</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>'
-            else:
-                kml += f'<Placemark><name>{dev_id}</name><Point><coordinates>{lng},{lat},0</coordinates></Point></Placemark>'
+                if is_line: kml += f'<Placemark><name>{dev_id}</name><Style><LineStyle><color>{kml_color}</color><width>2.5</width></LineStyle></Style><LineString><coordinates>{coords_str}</coordinates></LineString></Placemark>'
+                else: kml += f'<Placemark><name>{dev_id}</name><Style><LineStyle><color>{kml_color}</color><width>2.5</width></LineStyle><PolyStyle><color>66{kml_color[2:]}</color></PolyStyle></Style><Polygon><outerBoundaryIs><LinearRing><coordinates>{coords_str}</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>'
+            else: kml += f'<Placemark><name>{dev_id}</name><Point><coordinates>{lng},{lat},0</coordinates></Point></Placemark>'
         elif dev.get("isPolygon") and polygon:
             perimeter_coords = " ".join([f"{pt[1]},{pt[0]},0" for pt in polygon]) + f" {polygon[0][1]},{polygon[0][0]},0"
             kml += f'<Placemark><name>{dev_id} Boundary</name><Style><LineStyle><color>ff0000ff</color><width>3</width></LineStyle><PolyStyle><color>440000ff</color></PolyStyle></Style><Polygon><outerBoundaryIs><LinearRing><coordinates>{perimeter_coords}</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>'
@@ -511,13 +504,13 @@ def generate_range_exports(payload: RangeExportRequest, db: Session = Depends(ge
     result = db.execute(text("SELECT sensor_type, sensor_name, alert_id, priority, latitude, longitude, distance_m, bearing, timestamp FROM alert_logs WHERE timestamp >= :st AND timestamp <= :et"), {"st": payload.startTime, "et": payload.endTime})
     alerts_list = [dict(row._mapping) for row in result]
     devs_query = db.query(DeviceConfigDB).all()
-    devs_list = [{"id": d.id, "type": d.type, "lat": d.lat, "lng": d.lng, "innerRange": d.innerRange, "outerRange": d.outerRange, "azimuth": d.azimuth, "fov": d.fov, "isPolygon": d.isPolygon, "polygon": json.loads(d.polygon) if d.polygon else [], "envCategory": getattr(d, 'envCategory', 'GENERAL'), "color": getattr(d, 'color', '#3b82f6'), "sourceFile": getattr(d, 'sourceFile', 'Uploaded KML')} for d in devs_query]
+    devs_list = [{"id": d.id, "type": d.type, "lat": d.lat, "lng": d.lng, "innerRange": d.innerRange, "outerRange": d.outerRange, "azimuth": d.azimuth, "fov": d.fov, "isPolygon": d.isPolygon, "polygon": json.loads(d.polygon) if d.polygon else [], "envCategory": getattr(d, 'envCategory', 'GENERAL'), "color": getattr(d, 'color', '#3b82f6'), "sourceFile": getattr(d, 'sourceFile', 'Uploaded KML'), "workspace": getattr(d, 'workspace', 'Default')} for d in devs_query]
     return compile_kml_and_csv(payload.reportName or "Time_Range_Report", alerts_list, devs_list)
 
 @app.get("/api/config/devices")
 def get_saved_devices(db: Session = Depends(get_db)):
     devices = db.query(DeviceConfigDB).all()
-    return [{"id": d.id, "type": d.type, "lat": d.lat, "lng": d.lng, "innerRange": d.innerRange, "outerRange": d.outerRange, "azimuth": d.azimuth, "fov": d.fov, "alertCount": d.alertCount, "packetChoice": d.packetChoice, "isPolygon": d.isPolygon, "polygon": json.loads(d.polygon) if d.polygon else [], "envCategory": getattr(d, 'envCategory', 'GENERAL'), "color": getattr(d, 'color', '#3b82f6'), "sourceFile": getattr(d, 'sourceFile', 'Uploaded KML')} for d in devices]
+    return [{"id": d.id, "type": d.type, "lat": d.lat, "lng": d.lng, "innerRange": d.innerRange, "outerRange": d.outerRange, "azimuth": d.azimuth, "fov": d.fov, "alertCount": d.alertCount, "packetChoice": d.packetChoice, "isPolygon": d.isPolygon, "polygon": json.loads(d.polygon) if d.polygon else [], "envCategory": getattr(d, 'envCategory', 'GENERAL'), "color": getattr(d, 'color', '#3b82f6'), "sourceFile": getattr(d, 'sourceFile', 'Uploaded KML'), "workspace": getattr(d, 'workspace', 'Default')} for d in devices]
 
 @app.post("/api/config/devices")
 def save_devices(payload: List[DeviceModel], db: Session = Depends(get_db)):
@@ -534,8 +527,9 @@ def save_devices(payload: List[DeviceModel], db: Session = Depends(get_db)):
                 db_dev.envCategory = str(dev.envCategory or "GENERAL")
                 db_dev.color = str(dev.color or "#3b82f6")
                 db_dev.sourceFile = str(dev.sourceFile or "Uploaded KML")
+                db_dev.workspace = str(dev.workspace or "Default")
             else:
-                new_dev = DeviceConfigDB(id=str(dev.id), type=str(dev.type), lat=float(dev.lat), lng=float(dev.lng), innerRange=float(dev.innerRange), outerRange=float(dev.outerRange), azimuth=float(dev.azimuth), fov=float(dev.fov), alertCount=int(dev.alertCount), packetChoice=str(dev.packetChoice), isPolygon=bool(dev.isPolygon), polygon=poly_str, envCategory=str(dev.envCategory or "GENERAL"), color=str(dev.color or "#3b82f6"), sourceFile=str(dev.sourceFile or "Uploaded KML"))
+                new_dev = DeviceConfigDB(id=str(dev.id), type=str(dev.type), lat=float(dev.lat), lng=float(dev.lng), innerRange=float(dev.innerRange), outerRange=float(dev.outerRange), azimuth=float(dev.azimuth), fov=float(dev.fov), alertCount=int(dev.alertCount), packetChoice=str(dev.packetChoice), isPolygon=bool(dev.isPolygon), polygon=poly_str, envCategory=str(dev.envCategory or "GENERAL"), color=str(dev.color or "#3b82f6"), sourceFile=str(dev.sourceFile or "Uploaded KML"), workspace=str(dev.workspace or "Default"))
                 db.add(new_dev)
             db.commit()
         except Exception: db.rollback()
@@ -545,6 +539,14 @@ def save_devices(payload: List[DeviceModel], db: Session = Depends(get_db)):
 def delete_device(device_id: str, db: Session = Depends(get_db)):
     db.query(DeviceConfigDB).filter(DeviceConfigDB.id == device_id).delete()
     db.commit()
+    return {"status": "success"}
+
+# [NEW] Ultra-fast Batch Delete Endpoint for Files
+@app.post("/api/config/devices/delete_batch")
+def delete_device_batch(payload: DeleteBatchRequest, db: Session = Depends(get_db)):
+    if payload.ids:
+        db.query(DeviceConfigDB).filter(DeviceConfigDB.id.in_(payload.ids)).delete(synchronize_session=False)
+        db.commit()
     return {"status": "success"}
 
 @app.get("/api/config/schemas")
@@ -576,17 +578,17 @@ def delete_schema(schema_name: str, db: Session = Depends(get_db)):
 @app.get("/api/state/scenario")
 def get_scenario_state(db: Session = Depends(get_db)):
     s = db.query(ScenarioStateDB).filter(ScenarioStateDB.id == "current").first()
-    if s: return { "name": s.name, "activeDevices": json.loads(s.activeDevices), "udpIp": s.udpIp, "udpPort": s.udpPort }
-    return { "name": "Operation Alpha", "activeDevices": [], "udpIp": "127.0.0.1", "udpPort": 5005 }
+    if s: return { "name": s.name, "activeDevices": json.loads(s.activeDevices), "udpIp": s.udpIp, "udpPort": s.udpPort, "workspace": getattr(s, 'workspace', 'Default') }
+    return { "name": "Operation Alpha", "activeDevices": [], "udpIp": "127.0.0.1", "udpPort": 5005, "workspace": "Default" }
 
 @app.post("/api/state/scenario")
 def save_scenario_state(payload: ScenarioModel, db: Session = Depends(get_db)):
     s = db.query(ScenarioStateDB).filter(ScenarioStateDB.id == "current").first()
     dev_str = json.dumps(payload.activeDevices)
     if s:
-        s.name = payload.name; s.activeDevices = dev_str; s.udpIp = payload.udpIp; s.udpPort = payload.udpPort
+        s.name = payload.name; s.activeDevices = dev_str; s.udpIp = payload.udpIp; s.udpPort = payload.udpPort; s.workspace = str(payload.workspace or "Default")
     else:
-        new_s = ScenarioStateDB(id="current", name=payload.name, activeDevices=dev_str, udpIp=payload.udpIp, udpPort=payload.udpPort)
+        new_s = ScenarioStateDB(id="current", name=payload.name, activeDevices=dev_str, udpIp=payload.udpIp, udpPort=payload.udpPort, workspace=str(payload.workspace or "Default"))
         db.add(new_s)
     db.commit()
     return {"status": "success"}

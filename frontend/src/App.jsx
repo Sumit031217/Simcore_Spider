@@ -3,7 +3,8 @@ import {
   Shield, Settings, Server, MapPin, Trash2, CheckCircle, 
   Upload, Network, Clock, FileOutput, Save, BellDot, 
   Globe, Sliders, Play, Square, Terminal, CheckSquare, Download, Target,
-  AlertTriangle, Search, ArrowUpDown, Calendar, Layers, FolderTree
+  AlertTriangle, Search, ArrowUpDown, Calendar, Layers, FolderTree,
+  Menu, Maximize, Minimize, X, Briefcase
 } from 'lucide-react';
 import { MapContainer, TileLayer, Popup, CircleMarker, Circle, Polygon as LeafletPolygon, Polyline as LeafletPolyline } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -48,10 +49,47 @@ const parseKmlColor = (kmlHex) => {
 // ==========================================
 const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas }) => {
   const [status, setStatus] = useState({ message: 'System Ready', type: 'info' });
+  const [newWorkspaceName, setNewWorkspaceName] = useState('');
 
   const safeDevices = Array.isArray(devices) ? devices : [];
-  const hardwareSensors = useMemo(() => safeDevices.filter(d => d && d.type && !String(d.type).toUpperCase().includes('ENV')), [safeDevices]);
-  const environmentFeatures = useMemo(() => safeDevices.filter(d => d && d.type && String(d.type).toUpperCase().includes('ENV')), [safeDevices]);
+  
+  // Extract unique workspaces
+  const allWorkspaces = useMemo(() => Array.from(new Set(safeDevices.map(d => d.workspace || 'Default'))), [safeDevices]);
+  const [activeWorkspace, setActiveWorkspace] = useState('Default');
+
+  // Set default workspace safely on load
+  useEffect(() => {
+    if (allWorkspaces.length > 0 && !allWorkspaces.includes(activeWorkspace)) {
+      setActiveWorkspace(allWorkspaces[0]);
+    }
+  }, [allWorkspaces, activeWorkspace]);
+
+  // Filter UI tables by active workspace
+  const hardwareSensors = useMemo(() => safeDevices.filter(d => d && d.type && !String(d.type).toUpperCase().includes('ENV') && (d.workspace || 'Default') === activeWorkspace), [safeDevices, activeWorkspace]);
+  const environmentFeatures = useMemo(() => safeDevices.filter(d => d && d.type && String(d.type).toUpperCase().includes('ENV') && (d.workspace || 'Default') === activeWorkspace), [safeDevices, activeWorkspace]);
+
+  // Aggregate thousands of KML polygons into clean visual groups
+  const fileGroups = useMemo(() => {
+    const map = new Map();
+    environmentFeatures.forEach(env => {
+        const key = `${env.workspace || 'Default'}::${env.sourceFile || 'Uploaded KML'}`;
+        if(!map.has(key)) {
+            map.set(key, { 
+                workspace: env.workspace || 'Default', 
+                sourceFile: env.sourceFile || 'Uploaded KML', 
+                color: env.color, 
+                envCategory: env.envCategory, 
+                count: 1,
+                ids: [env.id]
+            });
+        } else {
+            const obj = map.get(key);
+            obj.count += 1;
+            obj.ids.push(env.id);
+        }
+    });
+    return Array.from(map.values());
+  }, [environmentFeatures]);
 
   const syncDevicesToDB = async () => {
     try {
@@ -66,9 +104,7 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
         const text = await response.text();
         alert("❌ PYTHON REJECTED THE DATA:\n" + text);
       }
-    } catch (err) {
-      alert("🚨 NETWORK CRASH:\nThe browser blocked the connection to Python.\n" + err.message);
-    }
+    } catch (err) { alert("🚨 NETWORK CRASH:\nThe browser blocked the connection to Python.\n" + err.message); }
   };
 
   const syncSchemasToDB = async () => {
@@ -84,9 +120,7 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
         const text = await response.text();
         alert("❌ PYTHON REJECTED THE DATA:\n" + text);
       }
-    } catch (err) {
-      alert("🚨 NETWORK CRASH:\nThe browser blocked the connection to Python.\n" + err.message);
-    }
+    } catch (err) { alert("🚨 NETWORK CRASH:\nThe browser blocked the connection to Python.\n" + err.message); }
   };
 
   const handleSensorJsonUpload = async (event) => {
@@ -130,14 +164,15 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
                     id: d.SensorId || `UNK_${Math.floor(Math.random()*1000)}`, type: d.SensorType || "Unknown",
                     innerRange: parseFloat(d.InnerRange || 0), outerRange: parseFloat(d.OuterRange || 100),
                     azimuth: parseFloat(d.Azimuth || 0), fov: parseFloat(d.FOV || 360),
-                    alertCount: parseInt(d.AlertCount || 0), packetChoice: d.PacketChoice || "", lat, lng, isPolygon, polygon: polygonArr
+                    alertCount: parseInt(d.AlertCount || 0), packetChoice: d.PacketChoice || "", lat, lng, isPolygon, polygon: polygonArr,
+                    workspace: activeWorkspace // Assign to selected workspace
                 };
             });
             combinedSensors = [...combinedSensors, ...parsedSensors];
         } catch (err) { alert(`🚨 FORMAT ERROR in ${file.name}!\n\nDetails: ${err.message}`); }
     }
     setDevices(prev => [...(Array.isArray(prev) ? prev : []), ...combinedSensors]);
-    setStatus({ message: `Loaded ${combinedSensors.length} Sensors. Please click 'Save Sensors to DB'.`, type: 'info' });
+    setStatus({ message: `Loaded ${combinedSensors.length} Sensors into ${activeWorkspace}.`, type: 'info' });
   };
 
   const handleSchemaUpload = async (event) => {
@@ -163,7 +198,7 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
         } catch (err) { alert(`🚨 SCHEMA ERROR in ${file.name}!\n\nDetails: ${err.message}`); }
     }
     setSensorSchemas(prev => [...(Array.isArray(prev) ? prev : []), ...combinedSchemas]);
-    setStatus({ message: `Loaded ${combinedSchemas.length} Protocol Schemas. Please click 'Save Formats to DB'.`, type: 'info' });
+    setStatus({ message: `Loaded ${combinedSchemas.length} Protocol Schemas.`, type: 'info' });
   };
 
   const handleEnvironmentKmlUpload = async (event) => {
@@ -193,7 +228,8 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
                     polygon: feat.coordinates,
                     lat: feat.coordinates[0]?.[0] || 0, lng: feat.coordinates[0]?.[1] || 0,
                     innerRange: 0, outerRange: 0, azimuth: 0, fov: 0, alertCount: 0, packetChoice: "",
-                    color: feat.style.fillColor
+                    color: feat.style.fillColor,
+                    workspace: activeWorkspace // Assign to selected workspace
                 });
             });
         } catch (err) { alert(`🚨 KML SYNTAX ERROR in ${file.name}!`); }
@@ -207,14 +243,14 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
     fetch(`http://127.0.0.1:8000/api/config/devices/${id}`, { method: 'DELETE' }).catch(() => {});
   };
 
-  const clearAllEnvironmentFeatures = async () => {
-    if (!window.confirm(`Are you sure you want to remove all ${environmentFeatures.length} loaded GIS layers? Your hardware sensors will remain intact.`)) return;
-    const envIds = environmentFeatures.map(f => f.id);
-    setDevices(prev => (Array.isArray(prev) ? prev : []).filter(d => d.type && !String(d.type).toUpperCase().includes('ENV')));
-    for (const id of envIds) {
-      fetch(`http://127.0.0.1:8000/api/config/devices/${id}`, { method: 'DELETE' }).catch(() => {});
-    }
-    setStatus({ message: "Cleared all Environment GIS Layers", type: 'info' });
+  const removeFileFeatures = async (ids) => {
+    if (!window.confirm(`Are you sure you want to delete these ${ids.length} GIS features permanently?`)) return;
+    setDevices(prev => prev.filter(d => !ids.includes(d.id)));
+    try {
+        await fetch('http://127.0.0.1:8000/api/config/devices/delete_batch', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids })
+        });
+    } catch (err) {}
   };
 
   const removeSchema = (name) => {
@@ -229,38 +265,74 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
         <div className={`px-4 py-2 rounded font-mono text-xs font-bold border ${status.type === 'error' ? 'bg-rose-950/50 border-rose-800 text-rose-400' : 'bg-emerald-950/50 border-emerald-800 text-emerald-400'}`}>{status.message}</div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-sm">
-          <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center"><Target className="w-4 h-4 mr-2 text-rose-400"/> Sensor Array Input</h3>
-          <div className="border-2 border-dashed border-slate-700 rounded-lg p-6 text-center hover:bg-slate-800/50 transition-colors relative">
-            <input type="file" multiple accept=".json" onClick={(e) => { e.target.value = null; }} onChange={handleSensorJsonUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-            <Server className="w-8 h-8 text-slate-500 mx-auto mb-2" /><p className="text-sm font-bold text-slate-300">Upload JSON File(s)</p>
+      {/* WORKSPACE SELECTION HEADER */}
+      <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+          <div className="flex items-center space-x-4">
+              <Briefcase className="w-6 h-6 text-emerald-400" />
+              <div className="flex flex-col">
+                  <span className="text-xs font-mono text-slate-500 uppercase">Target Workspace Environment</span>
+                  <select value={activeWorkspace} onChange={e => setActiveWorkspace(e.target.value)} className="bg-slate-950 border border-slate-700 rounded px-3 py-1.5 text-sm font-bold text-emerald-400 focus:outline-none focus:border-emerald-500 mt-1 min-w-[200px] cursor-pointer">
+                      {allWorkspaces.length === 0 && <option value="Default">Default</option>}
+                      {allWorkspaces.map(ws => <option key={ws} value={ws}>{ws}</option>)}
+                  </select>
+              </div>
           </div>
-        </div>
-        <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-sm">
-          <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center"><Settings className="w-4 h-4 mr-2 text-fuchsia-400"/> Packet Format Input</h3>
-          <div className="border-2 border-dashed border-slate-700 rounded-lg p-6 text-center hover:bg-slate-800/50 transition-colors relative">
-            <input type="file" multiple accept=".json" onClick={(e) => { e.target.value = null; }} onChange={handleSchemaUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-            <Server className="w-8 h-8 text-slate-500 mx-auto mb-2" /><p className="text-sm font-bold text-slate-300">Upload JSON Schema(s)</p>
+          <div className="flex items-center space-x-2 bg-slate-950 p-2 rounded border border-slate-800">
+              <input type="text" value={newWorkspaceName} onChange={e => setNewWorkspaceName(e.target.value)} placeholder="New Workspace Name..." className="bg-transparent px-2 py-1 text-sm text-slate-200 outline-none w-48" />
+              <button onClick={() => { if(newWorkspaceName) setActiveWorkspace(newWorkspaceName.trim()); setNewWorkspaceName(''); }} className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-1.5 px-4 rounded text-xs transition-colors cursor-pointer">CREATE & SELECT</button>
           </div>
-        </div>
-        <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-sm">
-          <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center"><MapPin className="w-4 h-4 mr-2 text-emerald-400"/> Environment Input</h3>
-          <div className="border-2 border-dashed border-slate-700 rounded-lg p-6 text-center hover:bg-slate-800/50 transition-colors relative">
-            <input type="file" multiple accept=".kml" onClick={(e) => { e.target.value = null; }} onChange={handleEnvironmentKmlUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-            <MapPin className="w-8 h-8 text-slate-500 mx-auto mb-2" /><p className="text-sm font-bold text-slate-300">Upload KML File(s)</p>
-          </div>
-        </div>
       </div>
 
+      {/* --- UI UPDATE: 3-COLUMN PARALLEL GRID --- */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        
+        {/* Global Input */}
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-sm flex flex-col relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-fuchsia-500"></div>
+          <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-1 flex items-center"><Settings className="w-4 h-4 mr-2 text-fuchsia-400"/> Global Packet Formats</h3>
+          <p className="text-[10px] font-mono text-slate-500 mb-4 truncate">Applies globally across all workspaces</p>
+          <div className="border-2 border-dashed border-slate-700 rounded-lg p-6 text-center hover:bg-slate-800/50 transition-colors relative flex-1 flex flex-col justify-center">
+            <input type="file" multiple accept=".json" onClick={(e) => { e.target.value = null; }} onChange={handleSchemaUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+            <Server className="w-8 h-8 text-slate-500 mx-auto mb-2" />
+            <p className="text-sm font-bold text-slate-300">Upload JSON Schema(s)</p>
+          </div>
+        </div>
+
+        {/* Workspace Input 1 */}
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-sm flex flex-col relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-emerald-500"></div>
+          <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-1 flex items-center"><Target className="w-4 h-4 mr-2 text-rose-400"/> Sensor Array Input</h3>
+          <p className="text-[10px] font-mono text-emerald-500 mb-4 truncate">Targeting Workspace: <span className="font-bold">{activeWorkspace}</span></p>
+          <div className="border-2 border-dashed border-slate-700 rounded-lg p-6 text-center hover:bg-slate-800/50 transition-colors relative flex-1 flex flex-col justify-center">
+            <input type="file" multiple accept=".json" onClick={(e) => { e.target.value = null; }} onChange={handleSensorJsonUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+            <Target className="w-8 h-8 text-slate-500 mx-auto mb-2" />
+            <p className="text-sm font-bold text-slate-300">Upload Sensor Array (.JSON)</p>
+          </div>
+        </div>
+
+        {/* Workspace Input 2 */}
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-sm flex flex-col relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-emerald-500"></div>
+          <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-1 flex items-center"><MapPin className="w-4 h-4 mr-2 text-cyan-400"/> Environment Input</h3>
+          <p className="text-[10px] font-mono text-emerald-500 mb-4 truncate">Targeting Workspace: <span className="font-bold">{activeWorkspace}</span></p>
+          <div className="border-2 border-dashed border-slate-700 rounded-lg p-6 text-center hover:bg-slate-800/50 transition-colors relative flex-1 flex flex-col justify-center">
+            <input type="file" multiple accept=".kml" onClick={(e) => { e.target.value = null; }} onChange={handleEnvironmentKmlUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+            <MapPin className="w-8 h-8 text-slate-500 mx-auto mb-2" />
+            <p className="text-sm font-bold text-slate-300">Upload Environment (.KML)</p>
+          </div>
+        </div>
+
+      </div>
+
+      {/* DATA TABLES */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mt-6">
         <div className="xl:col-span-2 bg-slate-900 border border-slate-800 rounded-lg flex flex-col overflow-hidden shadow-sm h-[380px]">
           <div className="bg-slate-850 border-b border-slate-800 px-5 py-4 flex justify-between items-center">
-            <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center"><Server className="w-4 h-4 mr-2 text-indigo-400"/> Deployed Tactical Sensors ({hardwareSensors.length})</h3>
-            <button onClick={syncDevicesToDB} className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 px-4 rounded text-xs flex items-center shadow-lg"><Save className="w-4 h-4 mr-2" /> SAVE SENSORS TO DB</button>
+            <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center"><Server className="w-4 h-4 mr-2 text-indigo-400"/> Deployed Sensors ({hardwareSensors.length})</h3>
+            <button onClick={syncDevicesToDB} className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 px-4 rounded text-xs flex items-center shadow-lg cursor-pointer"><Save className="w-4 h-4 mr-2" /> SAVE SENSORS TO DB</button>
           </div>
           <div className="flex-1 overflow-auto p-0">
-            {hardwareSensors.length === 0 ? <div className="h-full flex flex-col items-center justify-center text-slate-600 font-mono text-sm">No hardware sensors loaded.</div> : (
+            {hardwareSensors.length === 0 ? <div className="h-full flex flex-col items-center justify-center text-slate-600 font-mono text-sm">No hardware sensors loaded in this workspace.</div> : (
               <table className="w-full text-left text-sm whitespace-nowrap">
                 <thead className="bg-slate-950/50 text-slate-400 font-mono text-xs sticky top-0 z-10"><tr><th className="p-3">ID / Protocol</th><th className="p-3">Location / Boundary</th><th className="p-3">Parameters</th><th className="p-3 text-right">Action</th></tr></thead>
                 <tbody className="divide-y divide-slate-800/50">
@@ -273,12 +345,12 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
                             <div className="font-bold text-slate-200">{dev.id || "Unknown"}</div>
                             <div className={`text-xs uppercase flex items-center ${isMissingPacket ? 'text-rose-400 font-bold' : 'text-cyan-500'}`}>
                                 {dev.packetChoice ? `PKT: ${dev.packetChoice}` : (dev.type || 'UNKNOWN')}
-                                {isMissingPacket && <AlertTriangle className="w-3 h-3 ml-1" />}
+                                {isMissingPacket && <AlertTriangle className="w-3 h-3 ml-1" title="Missing Packet Format Schema!" />}
                             </div>
                         </td>
                         <td className="p-3 font-mono text-xs text-slate-400">{dev.isPolygon ? `PIDS FENCE (${Array.isArray(dev.polygon) ? dev.polygon.length : 0} pts)` : `${parseFloat(dev.lat || 0).toFixed(4)}, ${parseFloat(dev.lng || 0).toFixed(4)}`}</td>
                         <td className="p-3 font-mono text-cyan-400 text-xs">{dev.isPolygon ? `${dev.alertCount || 0} Target Alerts` : `${dev.innerRange || 0}-${dev.outerRange || 0}m | ${dev.alertCount || 0} Alerts`}</td>
-                        <td className="p-3 text-right"><button onClick={() => removeDevice(dev.id)} className="text-slate-500 hover:text-rose-400"><Trash2 className="w-4 h-4 inline" /></button></td>
+                        <td className="p-3 text-right"><button onClick={() => removeDevice(dev.id)} className="text-slate-500 hover:text-rose-400 cursor-pointer"><Trash2 className="w-4 h-4 inline" /></button></td>
                       </tr>
                     );
                   })}
@@ -291,7 +363,7 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
         <div className="bg-slate-900 border border-slate-800 rounded-lg flex flex-col overflow-hidden shadow-sm h-[380px]">
           <div className="bg-slate-850 border-b border-slate-800 px-5 py-4 flex justify-between items-center">
             <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center"><Settings className="w-4 h-4 mr-2 text-fuchsia-400"/> Packet Formats ({(Array.isArray(sensorSchemas) ? sensorSchemas : []).length})</h3>
-            <button onClick={syncSchemasToDB} className="bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-bold py-1.5 px-4 rounded text-xs flex items-center shadow-lg"><Save className="w-4 h-4 mr-2" /> SAVE FORMATS</button>
+            <button onClick={syncSchemasToDB} className="bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-bold py-1.5 px-4 rounded text-xs flex items-center shadow-lg cursor-pointer"><Save className="w-4 h-4 mr-2" /> SAVE FORMATS</button>
           </div>
           <div className="flex-1 overflow-auto">
             {(!sensorSchemas || sensorSchemas.length === 0) ? <div className="p-10 text-center text-slate-500 font-mono text-xs">No schemas loaded.</div> : (
@@ -301,7 +373,7 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
                   {sensorSchemas.map((schema, idx) => (
                     <tr key={schema.name || idx} className="hover:bg-slate-800/30">
                       <td className="p-3 font-bold text-fuchsia-400">{schema.name || 'UNKNOWN'} <span className="text-slate-500 font-normal">[{schema.separator || ','}]</span></td>
-                      <td className="p-3 text-right"><button onClick={() => removeSchema(schema.name)} className="text-slate-500 hover:text-rose-400"><Trash2 className="w-4 h-4 inline" /></button></td>
+                      <td className="p-3 text-right"><button onClick={() => removeSchema(schema.name)} className="text-slate-500 hover:text-rose-400 cursor-pointer"><Trash2 className="w-4 h-4 inline" /></button></td>
                     </tr>
                   ))}
                 </tbody>
@@ -314,61 +386,54 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
       <div className="bg-slate-900 border border-slate-800 rounded-lg flex flex-col overflow-hidden shadow-sm h-[360px] mt-6">
         <div className="bg-slate-850 border-b border-slate-800 px-5 py-4 flex justify-between items-center">
           <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider flex items-center">
-            <Layers className="w-4 h-4 mr-2 text-emerald-400"/> Environment GIS Features ({environmentFeatures.length})
+            <Layers className="w-4 h-4 mr-2 text-emerald-400"/> Workspace KML Files ({fileGroups.length})
           </h3>
           <div className="flex items-center space-x-3">
-            {environmentFeatures.length > 0 && (
-              <button onClick={clearAllEnvironmentFeatures} className="bg-rose-950 hover:bg-rose-900 border border-rose-800 text-rose-300 font-bold py-1.5 px-3 rounded text-xs flex items-center transition-colors">
-                <Trash2 className="w-3.5 h-3.5 mr-1.5" /> CLEAR ALL GIS
-              </button>
-            )}
-            <button onClick={syncDevicesToDB} className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 px-4 rounded text-xs flex items-center shadow-lg">
+            <button onClick={syncDevicesToDB} className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 px-4 rounded text-xs flex items-center shadow-lg cursor-pointer">
               <Save className="w-4 h-4 mr-2" /> SAVE GIS TO DB
             </button>
           </div>
         </div>
         <div className="flex-1 overflow-auto p-0">
-          {environmentFeatures.length === 0 ? (
+          {fileGroups.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-600 font-mono text-sm">
-              No KML Environment layers loaded. Upload KML files above to apply GIS constraints.
+              No KML Environment layers loaded in this workspace. 
             </div>
           ) : (
             <table className="w-full text-left text-sm whitespace-nowrap">
               <thead className="bg-slate-950/50 text-slate-400 font-mono text-xs sticky top-0 z-10">
                 <tr>
-                  <th className="p-3">Source File / Feature</th>
-                  <th className="p-3">Geometry</th>
-                  <th className="p-3">Coordinates / Vertices</th>
+                  <th className="p-3">Uploaded KML File</th>
+                  <th className="p-3">Category Assignment</th>
+                  <th className="p-3">Feature Complexity</th>
                   <th className="p-3">Assigned Layer Color</th>
-                  <th className="p-3 text-right">Action</th>
+                  <th className="p-3 text-right">Delete Layer</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/50">
-                {environmentFeatures.map((env, idx) => {
-                  const isLine = ['ROAD', 'RAILWAY'].includes(env.envCategory);
-                  return (
-                  <tr key={env.id || idx} className="hover:bg-slate-800/30">
+                {fileGroups.map((group, idx) => (
+                  <tr key={idx} className="hover:bg-slate-800/30">
                     <td className="p-3">
-                      <div className="font-bold text-emerald-400">{env.id || 'Unknown'}</div>
-                      <div className="text-[11px] font-mono text-slate-500">{env.sourceFile || 'Uploaded KML'}</div>
+                      <div className="font-bold text-emerald-400">{group.sourceFile}</div>
+                      <div className="text-[11px] font-mono text-slate-500">Workspace: {group.workspace}</div>
                     </td>
                     <td className="p-3 font-mono text-xs text-slate-300 uppercase">
-                      {env.isPolygon ? (isLine ? "POLYLINE" : "POLYGON") : "POINT"}
+                      {group.envCategory}
                     </td>
-                    <td className="p-3 font-mono text-xs text-slate-400">
-                      {env.isPolygon ? `${env.polygon?.length || 0} Vertices` : `${parseFloat(env.lat || 0).toFixed(4)}, ${parseFloat(env.lng || 0).toFixed(4)}`}
+                    <td className="p-3 font-mono text-xs text-amber-400">
+                      Contains {group.count} discrete features
                     </td>
                     <td className="p-3 font-mono text-xs flex items-center space-x-2">
-                      <span className="w-3.5 h-3.5 rounded-full border border-slate-500 shadow-sm inline-block" style={{ backgroundColor: env.color || '#3b82f6' }}></span>
-                      <span className="text-slate-300 font-bold">{env.color || '#3b82f6'}</span>
+                      <span className="w-3.5 h-3.5 rounded-full border border-slate-500 shadow-sm inline-block" style={{ backgroundColor: group.color }}></span>
+                      <span className="text-slate-300 font-bold">{group.color}</span>
                     </td>
                     <td className="p-3 text-right">
-                      <button onClick={() => removeDevice(env.id)} className="text-slate-500 hover:text-rose-400">
+                      <button onClick={() => removeFileFeatures(group.ids)} className="text-slate-500 hover:text-rose-400 cursor-pointer">
                         <Trash2 className="w-4 h-4 inline" />
                       </button>
                     </td>
                   </tr>
-                )})}
+                ))}
               </tbody>
             </table>
           )}
@@ -387,13 +452,17 @@ const ScenarioBuilderView = ({ scenario, setScenario, devices, sensorSchemas }) 
   const safeDevices = Array.isArray(devices) ? devices : [];
   const safeSchemas = Array.isArray(sensorSchemas) ? sensorSchemas : [];
   const safeActiveDevices = Array.isArray(scenario?.activeDevices) ? scenario.activeDevices : [];
+  
+  const allWorkspaces = useMemo(() => Array.from(new Set(safeDevices.map(d => d.workspace || 'Default'))), [safeDevices]);
 
+  // SCOPE AVAILABLE SENSORS STRICTLY TO THE SELECTED SCENARIO WORKSPACE
   const configurableSensors = useMemo(() => safeDevices.filter(d => {
       if (!d || !d.type || String(d.type).toUpperCase().includes('ENV')) return false;
+      if ((d.workspace || 'Default') !== (scenario?.workspace || 'Default')) return false;
       const hasPacketChoice = !!d.packetChoice;
       const isMissingPacket = hasPacketChoice && !safeSchemas.some(s => s && s.name && String(s.name).toUpperCase() === String(d.packetChoice).toUpperCase());
       return !isMissingPacket; 
-  }), [safeDevices, safeSchemas]);
+  }), [safeDevices, safeSchemas, scenario?.workspace]);
 
   const allSensorIds = useMemo(() => configurableSensors.map(d => d.id).filter(Boolean), [configurableSensors]);
   const isAllSelected = allSensorIds.length > 0 && allSensorIds.every(id => safeActiveDevices.includes(id));
@@ -438,12 +507,23 @@ const ScenarioBuilderView = ({ scenario, setScenario, devices, sensorSchemas }) 
         <span className="text-emerald-400 text-sm font-mono font-bold">{status && <><CheckCircle className="w-4 h-4 inline mr-2" />{status}</>}</span>
       </div>
       <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 shadow-sm md:col-span-2">
+        
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 shadow-sm md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
-            <label className="block text-xs font-mono text-slate-500 mb-1 uppercase tracking-wider">Mission Designation (Scenario Name)</label>
+            <label className="block text-xs font-mono text-slate-500 mb-1 uppercase tracking-wider">Mission Designation</label>
             <input type="text" name="name" required value={scenario?.name || ''} onChange={handleChange} className="w-full bg-slate-950 border border-slate-800 rounded px-4 py-3 text-white text-lg font-bold focus:border-indigo-500 focus:outline-none" />
           </div>
+          <div>
+            <label className="block text-xs font-mono text-slate-500 mb-1 uppercase tracking-wider flex items-center">
+                <FolderTree className="w-3.5 h-3.5 inline mr-1 text-emerald-400" /> Target Workspace
+            </label>
+            <select name="workspace" value={scenario?.workspace || 'Default'} onChange={handleChange} className="w-full bg-slate-950 border border-slate-800 rounded px-4 py-3 text-emerald-400 text-lg font-bold focus:border-emerald-500 focus:outline-none cursor-pointer">
+                {allWorkspaces.length === 0 && <option value="Default">Default</option>}
+                {allWorkspaces.map(ws => <option key={ws} value={ws}>{ws}</option>)}
+            </select>
+          </div>
         </div>
+
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 shadow-sm">
           <div className="flex justify-between items-center border-b border-slate-800 pb-2 mb-4">
               <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider flex items-center">
@@ -458,7 +538,16 @@ const ScenarioBuilderView = ({ scenario, setScenario, devices, sensorSchemas }) 
           </div>
 
           <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
-            {configurableSensors.length === 0 ? <div className="text-xs font-mono text-rose-400 p-3 bg-rose-950/20 border border-rose-900/50 rounded">No valid sensors loaded. Check missing formats.</div> : (
+            {configurableSensors.length === 0 ? (
+              <div className="text-xs font-mono text-rose-400 p-4 bg-rose-950/20 border border-rose-900/50 rounded flex flex-col space-y-2">
+                <strong className="text-sm">⚠️ No configurable sensors found.</strong>
+                <p>Sensors are hidden from this list if:</p>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li>They belong to a different Workspace.</li>
+                  <li>They require a Packet Format that is missing from Global Packet Formats.</li>
+                </ul>
+              </div>
+            ) : (
               configurableSensors.map(dev => {
                 const isActive = (scenario?.activeDevices || []).includes(dev.id);
                 return (
@@ -477,7 +566,7 @@ const ScenarioBuilderView = ({ scenario, setScenario, devices, sensorSchemas }) 
             <div><label className="block text-xs font-mono text-slate-500 mb-1">Target UDP Port</label><input type="number" name="udpPort" value={scenario?.udpPort || 5005} onChange={handleChange} className="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-cyan-400 font-mono" /></div>
           </div>
         </div>
-        <div className="md:col-span-2 flex justify-end"><button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-8 py-3 rounded text-sm shadow-lg"><Save className="w-4 h-4 inline mr-2" />SAVE SCENARIO ARCHITECTURE</button></div>
+        <div className="md:col-span-2 flex justify-end"><button type="submit" className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-8 py-3 rounded text-sm shadow-lg cursor-pointer"><Save className="w-4 h-4 inline mr-2" />SAVE SCENARIO ARCHITECTURE</button></div>
       </form>
     </div>
   );
@@ -493,7 +582,6 @@ const AlertGeneratorView = ({
 }) => {
   const safeDevices = Array.isArray(devices) ? devices : [];
   
-  // Cache the fleet calculation to stop CPU thrashing
   const activeFleet = useMemo(() => safeDevices.filter(d => d && (scenario?.activeDevices || []).includes(d.id)), [safeDevices, scenario]);
   const targetTotalAlerts = useMemo(() => activeFleet.reduce((acc, dev) => acc + getAlertCount(dev), 0), [activeFleet, overrideCounts]);
 
@@ -550,8 +638,8 @@ const AlertGeneratorView = ({
               <TelemetryProgress packetsSent={simProgress} totalPackets={targetTotalAlerts} />
             </div>
 
-            {!simIsRunning ? ( <button onClick={startSimulation} className="w-full flex justify-center items-center space-x-2 bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded text-sm shadow-lg"><Play className="w-4 h-4 fill-current" /> <span>ENGAGE TRANSMITTER</span></button> ) : (
-              <button onClick={stopSimulation} className="w-full flex justify-center items-center space-x-2 bg-slate-700 hover:bg-slate-600 text-white font-bold py-3 rounded text-sm shadow-lg animate-pulse"><Square className="w-4 h-4 fill-current" /> <span>ABORT</span></button> )}
+            {!simIsRunning ? ( <button onClick={startSimulation} className="w-full flex justify-center items-center space-x-2 bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded text-sm shadow-lg cursor-pointer"><Play className="w-4 h-4 fill-current" /> <span>ENGAGE TRANSMITTER</span></button> ) : (
+              <button onClick={stopSimulation} className="w-full flex justify-center items-center space-x-2 bg-slate-700 hover:bg-slate-600 text-white font-bold py-3 rounded text-sm shadow-lg animate-pulse cursor-pointer"><Square className="w-4 h-4 fill-current" /> <span>ABORT</span></button> )}
           </div>
         </div>
         <div className="xl:col-span-2">
@@ -570,14 +658,32 @@ const AlertGeneratorView = ({
 // ==========================================
 // VIEW 4: TACTICAL MAP WITH LAYER CONTROL PANEL
 // ==========================================
-const MapView = ({ devices = [], alerts = [], simIsRunning, simProgress, totalAlertsGenerated }) => {
+const MapView = ({ devices = [], alerts = [], simIsRunning, simProgress, totalAlertsGenerated, activeWorkspace }) => {
+  const mapContainerRef = useRef(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const [hiddenLayers, setHiddenLayers] = useState({});
+  const [isLayerPanelOpen, setIsLayerPanelOpen] = useState(false);
+
   const safeDevices = Array.isArray(devices) ? devices : [];
   const safeAlerts = Array.isArray(alerts) ? alerts : [];
 
-  const mapCenter = useMemo(() => safeDevices.length > 0 && safeDevices[0].lat ? [safeDevices[0].lat, safeDevices[0].lng] : [27.2285, 77.4320], [safeDevices]);
-  
-  const [showAll, setShowAll] = useState(false);
-  const [hiddenLayers, setHiddenLayers] = useState({});
+  const mapDevices = useMemo(() => safeDevices.filter(d => (d.workspace || 'Default') === activeWorkspace), [safeDevices, activeWorkspace]);
+  const mapCenter = useMemo(() => mapDevices.length > 0 && mapDevices[0].lat ? [mapDevices[0].lat, mapDevices[0].lng] : [27.2285, 77.4320], [mapDevices]);
+
+  useEffect(() => {
+    const handleFsChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handleFsChange);
+    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      if (mapContainerRef.current) mapContainerRef.current.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen();
+    }
+  };
 
   useEffect(() => {
     if (simIsRunning) setShowAll(false);
@@ -587,100 +693,126 @@ const MapView = ({ devices = [], alerts = [], simIsRunning, simProgress, totalAl
     setHiddenLayers(prev => ({ ...prev, [layerKey]: !prev[layerKey] }));
   };
 
-  // Cache Map Arrays to stop massive DOM lag during simulation
   const kmlSources = useMemo(() => Array.from(new Set(
-    safeDevices.filter(d => d && d.type && d.type.toUpperCase().includes('ENV')).map(d => d.sourceFile || 'Uploaded KML')
-  )), [safeDevices]);
+    mapDevices.filter(d => d && d.type && d.type.toUpperCase().includes('ENV')).map(d => d.sourceFile || 'Uploaded KML')
+  )), [mapDevices]);
 
   const getSourceColor = (srcName) => {
-    const match = safeDevices.find(d => (d.sourceFile || 'Uploaded KML') === srcName);
+    const match = mapDevices.find(d => (d.sourceFile || 'Uploaded KML') === srcName);
     return match ? (match.color || '#3b82f6') : '#3b82f6';
   };
 
-  const visibleDevices = useMemo(() => safeDevices.filter(dev => {
+  const visibleDevices = useMemo(() => mapDevices.filter(dev => {
     if (!dev || !dev.type) return false;
     if (dev.type.toUpperCase().includes('ENV')) {
       return !hiddenLayers[dev.sourceFile || 'Uploaded KML'];
     }
     return !hiddenLayers['HARDWARE_SENSORS'];
-  }), [safeDevices, hiddenLayers]);
+  }), [mapDevices, hiddenLayers]);
 
   const displayedAlerts = useMemo(() => 
     (showAll ? safeAlerts : safeAlerts.slice(-1000)).filter(() => !hiddenLayers['LIVE_ALERTS']), 
   [safeAlerts, showAll, hiddenLayers]);
 
   return (
-    <div className="p-6 space-y-6 max-w-[1600px] mx-auto h-[calc(100vh-4rem)] flex flex-col font-sans relative">
-      <div className="border-b border-slate-800 pb-4 flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-white flex items-center space-x-2">
-            <Globe className="w-6 h-6 text-cyan-400" />
-            <span>Tactical Map Visualizer</span>
-          </h2>
-        </div>
-        <div className="flex space-x-3">
-            <div className="flex items-center space-x-2 bg-rose-950/40 border border-rose-900 rounded px-3 py-1">
-                <Target className="w-4 h-4 text-rose-500" />
-                <span className="text-xs font-mono text-rose-400 font-bold">TOTAL GENERATED: {totalAlertsGenerated}</span>
-            </div>
-        </div>
-      </div>
-
-      <div className="flex-1 rounded-xl overflow-hidden border border-slate-700 shadow-2xl relative z-0 flex">
-        <div className="absolute top-4 left-4 z-[1000] bg-slate-900/90 backdrop-blur border border-slate-700 rounded-lg shadow-2xl p-4 w-64 max-h-[80%] overflow-y-auto">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
-            <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center">
-              <FolderTree className="w-4 h-4 mr-2 text-cyan-400" /> Tactical Layers
-            </h4>
+    <div className="p-6 space-y-4 max-w-[1600px] mx-auto h-[calc(100vh-4rem)] flex flex-col font-sans relative">
+      
+      {!isFullscreen && (
+        <div className="border-b border-slate-800 pb-4 flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-bold text-white flex items-center space-x-2">
+              <Globe className="w-6 h-6 text-cyan-400" />
+              <span>Tactical Map Visualizer <span className="text-xs font-mono text-slate-500 ml-2">[{activeWorkspace}]</span></span>
+            </h2>
           </div>
-
-          <div className="space-y-2 text-xs font-mono">
-            <label className="flex items-center justify-between p-2 rounded hover:bg-slate-800/50 cursor-pointer select-none">
-              <div className="flex items-center space-x-2">
-                <input type="checkbox" checked={!hiddenLayers['HARDWARE_SENSORS']} onChange={() => toggleLayer('HARDWARE_SENSORS')} className="w-3.5 h-3.5 accent-cyan-500 rounded cursor-pointer" />
-                <span className="text-slate-200 font-bold">Hardware Sensors</span>
+          <div className="flex space-x-3">
+              <div className="flex items-center space-x-2 bg-rose-950/40 border border-rose-900 rounded px-3 py-1">
+                  <Target className="w-4 h-4 text-rose-500" />
+                  <span className="text-xs font-mono text-rose-400 font-bold">TOTAL GENERATED: {totalAlertsGenerated}</span>
               </div>
-              <span className="w-3 h-3 rounded-full bg-amber-400 inline-block"></span>
-            </label>
+          </div>
+        </div>
+      )}
 
-            <label className="flex items-center justify-between p-2 rounded hover:bg-slate-800/50 cursor-pointer select-none">
-              <div className="flex items-center space-x-2">
-                <input type="checkbox" checked={!hiddenLayers['LIVE_ALERTS']} onChange={() => toggleLayer('LIVE_ALERTS')} className="w-3.5 h-3.5 accent-cyan-500 rounded cursor-pointer" />
-                <span className="text-slate-200 font-bold">Live UDP Alerts</span>
+      <div ref={mapContainerRef} className={`relative z-0 flex ${isFullscreen ? 'w-screen h-screen bg-slate-950' : 'flex-1 rounded-xl overflow-hidden border border-slate-700 shadow-2xl'}`}>
+        
+        <div className="absolute top-24 left-4 z-[1000]">
+          {!isLayerPanelOpen ? (
+            <button onClick={() => setIsLayerPanelOpen(true)} className="bg-slate-900/90 backdrop-blur border border-slate-700 p-2.5 rounded-lg shadow-2xl hover:bg-slate-800 transition-colors flex items-center space-x-2 group cursor-pointer">
+              <Layers className="w-5 h-5 text-cyan-400 group-hover:scale-110 transition-transform" />
+              <span className="text-xs font-bold text-slate-200 uppercase tracking-wider">Layers</span>
+            </button>
+          ) : (
+            <div className="bg-slate-900/95 backdrop-blur border border-slate-700 rounded-lg shadow-2xl p-4 w-64 max-h-[80vh] overflow-y-auto">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
+                <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center">
+                  <FolderTree className="w-4 h-4 mr-2 text-cyan-400" /> Tactical Layers
+                </h4>
+                <button onClick={() => setIsLayerPanelOpen(false)} className="text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"><X className="w-4 h-4" /></button>
               </div>
-              <span className="w-3 h-3 rounded-full bg-rose-500 inline-block"></span>
-            </label>
 
-            {kmlSources.length > 0 && <div className="border-t border-slate-800 pt-2 mt-2 text-[10px] text-slate-400 font-bold uppercase tracking-wider">Uploaded KML Files</div>}
-            
-            {kmlSources.map((srcName) => {
-              const badgeColor = getSourceColor(srcName);
-              const isChecked = !hiddenLayers[srcName];
-              return (
-                <label key={srcName} className="flex items-center justify-between p-2 rounded hover:bg-slate-800/50 cursor-pointer select-none">
-                  <div className="flex items-center space-x-2 truncate pr-2">
-                    <input type="checkbox" checked={isChecked} onChange={() => toggleLayer(srcName)} className="w-3.5 h-3.5 accent-emerald-500 rounded cursor-pointer shrink-0" />
-                    <span className={`truncate ${isChecked ? 'text-emerald-400 font-bold' : 'text-slate-500'}`}>{srcName}</span>
+              <div className="space-y-2 text-xs font-mono">
+                <label className="flex items-center justify-between p-2 rounded hover:bg-slate-800/50 cursor-pointer select-none">
+                  <div className="flex items-center space-x-2">
+                    <input type="checkbox" checked={!hiddenLayers['HARDWARE_SENSORS']} onChange={() => toggleLayer('HARDWARE_SENSORS')} className="w-3.5 h-3.5 accent-cyan-500 rounded cursor-pointer" />
+                    <span className="text-slate-200 font-bold">Hardware Sensors</span>
                   </div>
-                  <span className="w-3 h-3 rounded border border-slate-500 shrink-0" style={{ backgroundColor: badgeColor }}></span>
+                  <span className="w-3 h-3 rounded-full bg-amber-400 inline-block"></span>
                 </label>
-              );
-            })}
-          </div>
+
+                <label className="flex items-center justify-between p-2 rounded hover:bg-slate-800/50 cursor-pointer select-none">
+                  <div className="flex items-center space-x-2">
+                    <input type="checkbox" checked={!hiddenLayers['LIVE_ALERTS']} onChange={() => toggleLayer('LIVE_ALERTS')} className="w-3.5 h-3.5 accent-cyan-500 rounded cursor-pointer" />
+                    <span className="text-slate-200 font-bold">Live UDP Alerts</span>
+                  </div>
+                  <span className="w-3 h-3 rounded-full bg-rose-500 inline-block"></span>
+                </label>
+
+                {kmlSources.length > 0 && <div className="border-t border-slate-800 pt-2 mt-2 text-[10px] text-slate-400 font-bold uppercase tracking-wider">Uploaded KML Files</div>}
+                
+                {kmlSources.map((srcName) => {
+                  const badgeColor = getSourceColor(srcName);
+                  const isChecked = !hiddenLayers[srcName];
+                  return (
+                    <label key={srcName} className="flex items-center justify-between p-2 rounded hover:bg-slate-800/50 cursor-pointer select-none">
+                      <div className="flex items-center space-x-2 truncate pr-2">
+                        <input type="checkbox" checked={isChecked} onChange={() => toggleLayer(srcName)} className="w-3.5 h-3.5 accent-emerald-500 rounded cursor-pointer shrink-0" />
+                        <span className={`truncate ${isChecked ? 'text-emerald-400 font-bold' : 'text-slate-500'}`}>{srcName}</span>
+                      </div>
+                      <span className="w-3 h-3 rounded border border-slate-500 shrink-0" style={{ backgroundColor: badgeColor }}></span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
-        {safeAlerts.length > 1000 && !simIsRunning && (
-            <div className="absolute top-4 right-4 z-[1000]">
-                <button 
-                    onClick={() => setShowAll(!showAll)}
-                    className={`font-bold py-2 px-4 rounded shadow-lg text-xs flex items-center transition-colors ${showAll ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-rose-600 hover:bg-rose-500 text-white'}`}
-                >
-                    {showAll ? 'SHOW LATEST 1000 ONLY' : `LOAD ALL ${safeAlerts.length} ALERTS (MAY LAG)`}
-                </button>
-            </div>
+        <div className="absolute top-4 right-4 z-[1000] flex flex-col items-end space-y-2">
+          <button onClick={toggleFullscreen} className="bg-slate-900/90 backdrop-blur border border-slate-700 p-2.5 rounded-lg shadow-2xl hover:bg-slate-800 transition-colors text-white group cursor-pointer" title="Toggle Fullscreen">
+            {isFullscreen ? <Minimize className="w-5 h-5 text-cyan-400 group-hover:scale-110 transition-transform" /> : <Maximize className="w-5 h-5 text-cyan-400 group-hover:scale-110 transition-transform" />}
+          </button>
+
+          {safeAlerts.length > 1000 && !simIsRunning && (
+              <button 
+                  onClick={() => setShowAll(!showAll)}
+                  className={`font-bold py-2 px-4 rounded shadow-lg text-xs flex items-center transition-colors cursor-pointer ${showAll ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-rose-600 hover:bg-rose-500 text-white'}`}
+              >
+                  {showAll ? 'SHOW LATEST 1000 ONLY' : `LOAD ALL ${safeAlerts.length} ALERTS (MAY LAG)`}
+              </button>
+          )}
+        </div>
+
+        {isFullscreen && (
+          <div className="absolute bottom-6 left-6 z-[1000]">
+             <div className="flex items-center space-x-2 bg-rose-950/90 backdrop-blur border border-rose-900 rounded px-4 py-2 shadow-2xl">
+                 <Target className="w-5 h-5 text-rose-500" />
+                 <span className="text-sm font-mono text-rose-400 font-bold">TOTAL GENERATED: {totalAlertsGenerated}</span>
+             </div>
+          </div>
         )}
 
-        <MapContainer key={mapCenter.join(',')} center={mapCenter} zoom={13} className="h-full w-full" style={{ background: '#f8fafc' }} preferCanvas={true}>
+        <MapContainer key={mapCenter.join(',')} center={mapCenter} zoom={13} className="h-full w-full z-0" style={{ background: '#f8fafc' }} preferCanvas={true}>
           <TileLayer attribution='&copy; CartoDB' url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png" />
           
           {visibleDevices.map((dev) => {
@@ -809,7 +941,6 @@ const ExportView = ({ completedRuns }) => {
 
   const safeCompletedRuns = Array.isArray(completedRuns) ? completedRuns : [];
   
-  // Cache the filtered/sorted lists to stop UI lag
   const sortedRuns = useMemo(() => {
     const filteredRuns = safeCompletedRuns.filter(run => 
         run && run.scenarioName && String(run.scenarioName).toLowerCase().includes(searchTerm.toLowerCase())
@@ -865,7 +996,7 @@ const ExportView = ({ completedRuns }) => {
           <div>
             <button 
               type="submit" disabled={isRangeGenerating}
-              className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold py-2.5 px-4 rounded text-xs flex items-center justify-center shadow-lg transition-colors"
+              className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold py-2.5 px-4 rounded text-xs flex items-center justify-center shadow-lg transition-colors cursor-pointer"
             >
               <Download className="w-4 h-4 mr-2" /> {isRangeGenerating ? "QUERYING & COMPUTING..." : "GENERATE RANGE KML/CSV"}
             </button>
@@ -918,7 +1049,7 @@ const ExportView = ({ completedRuns }) => {
                           <button 
                             onClick={() => handleGenerate(run)} 
                             disabled={isAnyGenerating} 
-                            className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold px-4 py-2 rounded transition-colors text-xs flex items-center"
+                            className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold px-4 py-2 rounded transition-colors text-xs flex items-center cursor-pointer"
                           >
                               <Download className="w-3 h-3 mr-2" /> {isCurrentGenerating ? "GENERATING..." : "GENERATE OUTPUT"}
                           </button>
@@ -939,11 +1070,12 @@ const ExportView = ({ completedRuns }) => {
 // MASTER APP
 // ==========================================
 export default function App() {
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [currentView, setCurrentView] = useState('Device Configuration');
   const [dbStatus, setDbStatus] = useState('Checking...');
   const [sensorSchemas, setSensorSchemas] = useState([]); 
   const [devices, setDevices] = useState([]);
-  const [scenario, setScenario] = useState({ name: 'Operation Alpha', activeDevices: [], udpIp: '127.0.0.1', udpPort: 5005 });
+  const [scenario, setScenario] = useState({ name: 'Operation Alpha', activeDevices: [], udpIp: '127.0.0.1', udpPort: 5005, workspace: 'Default' });
   const [alertConfig, setAlertConfig] = useState({ minDelaySec: 0.0001, maxDelaySec: 0.0005 });
   const [completedRuns, setCompletedRuns] = useState([]);
   const [activeAlerts, setActiveAlerts] = useState([]);
@@ -1022,8 +1154,11 @@ export default function App() {
 
   const startSimulation = async () => {
     const safeDevices = Array.isArray(devices) ? devices : [];
+    
+    // STRICTLY FILTER FLEET TO ACTIVE WORKSPACE
     const activeFleet = safeDevices.filter(d => d && (scenario?.activeDevices || []).includes(d.id));
-    const environmentFleet = safeDevices.filter(d => d && d.type && String(d.type).toUpperCase().includes('ENV'));
+    const environmentFleet = safeDevices.filter(d => d && d.type && String(d.type).toUpperCase().includes('ENV') && d.workspace === scenario?.workspace);
+    
     const targetTotalAlerts = activeFleet.reduce((acc, dev) => acc + getAlertCount(dev), 0);
 
     if (activeFleet.length === 0) return alert("MISSION ABORT: No active sensors bound.");
@@ -1071,20 +1206,29 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100 font-sans selection:bg-cyan-900 overflow-hidden">
-      <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 z-10 shadow-2xl">
-        <div className="h-16 border-b border-slate-800 flex items-center px-6"><Shield className="w-6 h-6 text-emerald-400 mr-3" /><span className="font-bold tracking-wider text-lg">SIMCORE <span className="text-xs text-slate-500">v2.5</span></span></div>
-        <nav className="flex-1 py-4 overflow-y-auto">
-          <ul className="space-y-1">
-            {menuItems.map((item) => {
-              const Icon = item.icon; const isActive = currentView === item.name;
-              return (<li key={item.name}><button onClick={() => setCurrentView(item.name)} className={`w-full flex items-center px-6 py-3 text-sm font-medium transition-colors ${isActive ? 'bg-emerald-950/30 text-emerald-400 border-r-2 border-emerald-400' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}><Icon className={`w-4 h-4 mr-3 ${isActive ? 'text-emerald-400' : 'opacity-70'}`} /> {item.name}</button></li>);
-            })}
-          </ul>
-        </nav>
+      
+      <aside className={`bg-slate-900 border-slate-800 flex flex-col shrink-0 z-20 shadow-2xl transition-all duration-300 ease-in-out overflow-hidden ${isSidebarOpen ? 'w-64 border-r' : 'w-0 border-r-0'}`}>
+        <div className="w-64 h-full flex flex-col">
+          <div className="h-16 border-b border-slate-800 flex items-center px-6"><Shield className="w-6 h-6 text-emerald-400 mr-3" /><span className="font-bold tracking-wider text-lg">SIMCORE <span className="text-xs text-slate-500">v2.5</span></span></div>
+          <nav className="flex-1 py-4 overflow-y-auto">
+            <ul className="space-y-1">
+              {menuItems.map((item) => {
+                const Icon = item.icon; const isActive = currentView === item.name;
+                return (<li key={item.name}><button onClick={() => setCurrentView(item.name)} className={`w-full flex items-center px-6 py-3 text-sm font-medium transition-colors cursor-pointer ${isActive ? 'bg-emerald-950/30 text-emerald-400 border-r-2 border-emerald-400' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}><Icon className={`w-4 h-4 mr-3 ${isActive ? 'text-emerald-400' : 'opacity-70'}`} /> {item.name}</button></li>);
+              })}
+            </ul>
+          </nav>
+        </div>
       </aside>
+
       <main className="flex-1 flex flex-col relative overflow-hidden bg-slate-950">
         <header className="h-16 border-b border-slate-800 bg-slate-900/50 backdrop-blur px-6 flex items-center justify-between shrink-0">
-          <h1 className="text-sm font-bold text-slate-300 uppercase tracking-widest">{currentView}</h1>
+          <div className="flex items-center">
+            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="mr-4 p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer">
+               <Menu className="w-5 h-5" />
+            </button>
+            <h1 className="text-sm font-bold text-slate-300 uppercase tracking-widest">{currentView}</h1>
+          </div>
           <div className="flex items-center space-x-4">
             <div className={`flex items-center space-x-2 px-3 py-1.5 rounded-md border font-mono text-xs ${dbStatus === 'CONNECTED' ? 'bg-emerald-950 border-emerald-800 text-emerald-400' : 'bg-rose-950 border-rose-800 text-rose-400'}`}>
                 <span className={`w-2 h-2 rounded-full ${dbStatus === 'CONNECTED' ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
@@ -1093,10 +1237,11 @@ export default function App() {
             <div className="flex items-center space-x-2 px-3 py-1.5 rounded-md bg-slate-950 border border-slate-800 font-mono text-xs"><span className={`w-2 h-2 rounded-full ${simIsRunning ? 'bg-rose-500 animate-pulse' : 'bg-amber-500'}`}></span><span className="text-slate-300">ENGINE: {simIsRunning ? 'TRANSMITTING' : 'IDLE'}</span></div>
           </div>
         </header>
+        
         <div className="flex-1 overflow-y-auto">
           {currentView === 'Device Configuration' && <DeviceConfigView devices={devices} setDevices={setDevices} sensorSchemas={sensorSchemas} setSensorSchemas={setSensorSchemas} />}
           {currentView === 'Scenario Builder' && <ScenarioBuilderView devices={devices} scenario={scenario} setScenario={setScenario} sensorSchemas={sensorSchemas} />}
-          {currentView === 'Tactical Map' && <MapView devices={devices} alerts={activeAlerts} simIsRunning={simIsRunning} simProgress={simProgress} totalAlertsGenerated={totalAlertsGen} />}
+          {currentView === 'Tactical Map' && <MapView devices={devices} alerts={activeAlerts} simIsRunning={simIsRunning} simProgress={simProgress} totalAlertsGenerated={totalAlertsGen} activeWorkspace={scenario?.workspace || 'Default'} />}
           {currentView === 'Alert Generator' && <AlertGeneratorView devices={devices} scenario={scenario} alertConfig={alertConfig} setAlertConfig={setAlertConfig} setCompletedRuns={setCompletedRuns} setActiveAlerts={setActiveAlerts} sensorSchemas={sensorSchemas} simIsRunning={simIsRunning} simLogs={simLogs} simProgress={simProgress} startSimulation={startSimulation} stopSimulation={stopSimulation} overrideCounts={overrideCounts} setOverrideCounts={setOverrideCounts} getAlertCount={getAlertCount} />}
           {currentView === 'Reports / Export' && <ExportView completedRuns={completedRuns} />}
         </div>
