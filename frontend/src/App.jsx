@@ -53,6 +53,12 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
 
   const safeDevices = Array.isArray(devices) ? devices : [];
 
+  useEffect(() => {
+    if (allWorkspaces.length > 0 && !allWorkspaces.includes(activeWorkspace)) {
+      setActiveWorkspace(allWorkspaces[0]);
+    }
+  }, [allWorkspaces, activeWorkspace]);
+
   const hardwareSensors = useMemo(() => safeDevices.filter(d => d && d.type && !String(d.type).toUpperCase().includes('ENV') && (d.workspace || 'Default') === activeWorkspace), [safeDevices, activeWorkspace]);
   const environmentFeatures = useMemo(() => safeDevices.filter(d => d && d.type && String(d.type).toUpperCase().includes('ENV') && (d.workspace || 'Default') === activeWorkspace), [safeDevices, activeWorkspace]);
 
@@ -441,15 +447,17 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
 };
 
 // ==========================================
-// MODULE 2: SCENARIO BUILDER (WITH PROBABILITY EDITOR)
+// MODULE 2: SCENARIO BUILDER
 // ==========================================
-const ScenarioBuilderView = ({ scenario, setScenario, devices, sensorSchemas, activeWorkspace }) => {
+const ScenarioBuilderView = ({ scenario, setScenario, devices, sensorSchemas, activeWorkspace, sensorEvents }) => {
   const [status, setStatus] = useState('');
   
   const safeDevices = Array.isArray(devices) ? devices : [];
   const safeSchemas = Array.isArray(sensorSchemas) ? sensorSchemas : [];
   const safeActiveDevices = Array.isArray(scenario?.activeDevices) ? scenario.activeDevices : [];
   
+  const allWorkspaces = useMemo(() => Array.from(new Set(safeDevices.map(d => d.workspace || 'Default'))), [safeDevices]);
+
   const configurableSensors = useMemo(() => safeDevices.filter(d => {
       if (!d || !d.type || String(d.type).toUpperCase().includes('ENV')) return false;
       if ((d.workspace || 'Default') !== activeWorkspace) return false;
@@ -461,7 +469,6 @@ const ScenarioBuilderView = ({ scenario, setScenario, devices, sensorSchemas, ac
   const allSensorIds = useMemo(() => configurableSensors.map(d => d.id).filter(Boolean), [configurableSensors]);
   const isAllSelected = allSensorIds.length > 0 && allSensorIds.every(id => safeActiveDevices.includes(id));
   
-  // Extract all unique KML file names currently uploaded in this workspace
   const envFiles = useMemo(() => {
     const files = new Set();
     safeDevices.forEach(d => {
@@ -503,11 +510,30 @@ const ScenarioBuilderView = ({ scenario, setScenario, devices, sensorSchemas, ac
     }));
   };
 
+  // --- NEW: Map Device ID to a selected TargetType ID ---
+  const handleTargetChange = (deviceId, targetId) => {
+    setScenario(prev => ({
+        ...prev,
+        deviceAlertMapping: {
+            ...(prev.deviceAlertMapping || {}),
+            [deviceId]: targetId ? parseInt(targetId, 10) : null
+        }
+    }));
+  };
+
+  // Resolve which event list to show based on device type
+  const getEventsForDevice = (type) => {
+    const t = String(type).toUpperCase();
+    if (t.includes('RADAR')) return sensorEvents?.RADAR || [];
+    if (t.includes('CAM')) return sensorEvents?.CAMERA || [];
+    if (t.includes('PIDS')) return sensorEvents?.PIDS || [];
+    return [];
+  };
+
   const handleSave = async (e) => {
     e.preventDefault();
     if(!scenario || !Array.isArray(scenario.activeDevices) || scenario.activeDevices.length === 0) return alert("You must select at least one active sensor!");
     
-    // Ensure we are saving for the CURRENT workspace
     const payloadToSave = { ...scenario, workspace: activeWorkspace };
 
     try {
@@ -539,7 +565,6 @@ const ScenarioBuilderView = ({ scenario, setScenario, devices, sensorSchemas, ac
           </div>
         </div>
 
-        {/* --- NEW UI: GIS PROBABILITY CONSTRAINTS --- */}
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 shadow-sm md:col-span-2">
           <div className="flex justify-between items-center border-b border-slate-800 pb-2 mb-4">
               <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider flex items-center">
@@ -569,6 +594,7 @@ const ScenarioBuilderView = ({ scenario, setScenario, devices, sensorSchemas, ac
           </div>
         </div>
 
+        {/* --- HARDWARE BINDING & EVENT OVERRIDE UI --- */}
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 shadow-sm">
           <div className="flex justify-between items-center border-b border-slate-800 pb-2 mb-4">
               <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider flex items-center">
@@ -595,15 +621,43 @@ const ScenarioBuilderView = ({ scenario, setScenario, devices, sensorSchemas, ac
             ) : (
               configurableSensors.map(dev => {
                 const isActive = (scenario?.activeDevices || []).includes(dev.id);
+                const events = getEventsForDevice(dev.type);
+                const selectedTargetId = scenario?.deviceAlertMapping?.[dev.id] || '';
+
                 return (
-                <div key={dev.id} onClick={() => toggleDevice(dev.id)} className={`flex items-center justify-between p-3 rounded cursor-pointer border transition-colors ${isActive ? 'bg-indigo-950/40 border-indigo-500/50' : 'bg-slate-950 border-slate-800 hover:border-slate-700'}`}>
-                  <div><span className={`text-sm font-bold ${isActive ? 'text-indigo-400' : 'text-slate-300'}`}>{dev.id}</span><span className="text-xs text-slate-500 ml-2 uppercase">({dev.type})</span></div>
-                  <input type="checkbox" checked={isActive} readOnly className="w-4 h-4 accent-indigo-500" />
+                <div key={dev.id} className={`flex flex-col p-3 rounded cursor-pointer border transition-colors ${isActive ? 'bg-indigo-950/40 border-indigo-500/50' : 'bg-slate-950 border-slate-800 hover:border-slate-700'}`}>
+                  
+                  <div className="flex items-center justify-between" onClick={() => toggleDevice(dev.id)}>
+                    <div>
+                        <span className={`text-sm font-bold ${isActive ? 'text-indigo-400' : 'text-slate-300'}`}>{dev.id}</span>
+                        <span className="text-xs text-slate-500 ml-2 uppercase">({dev.type})</span>
+                    </div>
+                    <input type="checkbox" checked={isActive} readOnly className="w-4 h-4 accent-indigo-500" />
+                  </div>
+
+                  {/* Dynamic Target Selection Dropdown (Only visible when activated) */}
+                  {isActive && events.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-slate-800/50 flex items-center justify-between" onClick={e => e.stopPropagation()}>
+                          <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider">Target Signature</span>
+                          <select
+                              value={selectedTargetId}
+                              onChange={(e) => handleTargetChange(dev.id, e.target.value)}
+                              className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-indigo-300 font-mono focus:border-indigo-500 focus:outline-none cursor-pointer max-w-[150px] truncate"
+                          >
+                              <option value="">-- Default --</option>
+                              {events.map(ev => (
+                                  <option key={ev.id} value={ev.id}>{ev.name} (ID: {ev.id})</option>
+                              ))}
+                          </select>
+                      </div>
+                  )}
+
                 </div>
               )})
             )}
           </div>
         </div>
+        
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 shadow-sm">
           <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center border-b border-slate-800 pb-2"><Network className="w-4 h-4 mr-2 text-cyan-400"/> Target Routing</h3>
           <div className="grid grid-cols-1 gap-4">
@@ -703,7 +757,8 @@ const AlertGeneratorView = ({
 // ==========================================
 // VIEW 4: TACTICAL MAP WITH LAYER CONTROL PANEL
 // ==========================================
-const MapView = ({ devices = [], alerts = [], simIsRunning, simProgress, totalAlertsGenerated, activeWorkspace }) => {
+// Change this line:
+  const MapView = ({ devices = [], alerts = [], simIsRunning, simProgress, totalAlertsGenerated, activeWorkspace, clearAlerts }) => {
   const mapContainerRef = useRef(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showAll, setShowAll] = useState(false);
@@ -771,6 +826,18 @@ const MapView = ({ devices = [], alerts = [], simIsRunning, simProgress, totalAl
             </h2>
           </div>
           <div className="flex space-x-3">
+              {/* --- NEW BUTTON GOES HERE --- */}
+              <button 
+                  onClick={clearAlerts}
+                  disabled={simIsRunning}
+                  className="flex items-center space-x-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 border border-slate-700 rounded px-3 py-1 cursor-pointer transition-colors"
+                  title="Clear all alerts from map"
+              >
+                  <Trash2 className="w-4 h-4 text-slate-400" />
+                  <span className="text-xs font-mono text-slate-300 font-bold">CLEAR ALERTS</span>
+              </button>
+              {/* ---------------------------- */}
+              
               <div className="flex items-center space-x-2 bg-rose-950/40 border border-rose-900 rounded px-3 py-1">
                   <Target className="w-4 h-4 text-rose-500" />
                   <span className="text-xs font-mono text-rose-400 font-bold">TOTAL GENERATED: {totalAlertsGenerated}</span>
@@ -778,7 +845,6 @@ const MapView = ({ devices = [], alerts = [], simIsRunning, simProgress, totalAl
           </div>
         </div>
       )}
-
       <div ref={mapContainerRef} className={`relative z-0 flex ${isFullscreen ? 'w-screen h-screen bg-slate-950' : 'flex-1 rounded-xl overflow-hidden border border-slate-700 shadow-2xl'}`}>
         
         <div className="absolute top-24 left-4 z-[1000]">
@@ -849,7 +915,18 @@ const MapView = ({ devices = [], alerts = [], simIsRunning, simProgress, totalAl
         </div>
 
         {isFullscreen && (
-          <div className="absolute bottom-6 left-6 z-[1000]">
+          <div className="absolute bottom-6 left-6 z-[1000] flex items-center space-x-3">
+             {/* --- NEW BUTTON GOES HERE --- */}
+             <button 
+                  onClick={clearAlerts}
+                  disabled={simIsRunning}
+                  className="flex items-center space-x-2 bg-slate-900/90 backdrop-blur hover:bg-slate-800 disabled:opacity-50 border border-slate-700 rounded px-4 py-2 shadow-2xl cursor-pointer transition-colors"
+             >
+                  <Trash2 className="w-5 h-5 text-slate-400" />
+                  <span className="text-sm font-mono text-slate-300 font-bold">CLEAR ALERTS</span>
+             </button>
+             {/* ---------------------------- */}
+
              <div className="flex items-center space-x-2 bg-rose-950/90 backdrop-blur border border-rose-900 rounded px-4 py-2 shadow-2xl">
                  <Target className="w-5 h-5 text-rose-500" />
                  <span className="text-sm font-mono text-rose-400 font-bold">TOTAL GENERATED: {totalAlertsGenerated}</span>
@@ -1118,14 +1195,17 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [currentView, setCurrentView] = useState('Device Configuration');
   const [dbStatus, setDbStatus] = useState('Checking...');
+  
+  // NEW: State for dynamically loaded sensor events
+  const [sensorEvents, setSensorEvents] = useState({});
+
   const [sensorSchemas, setSensorSchemas] = useState([]); 
   const [devices, setDevices] = useState([]);
   
-  // ELEVATED WORKSPACE STATE TO ENSURE NEW ONES STAY IN MEMORY & PERSIST
-  const [activeWorkspace, setActiveWorkspace] = useState(() => localStorage.getItem('simcore_workspace') || 'Default');
   const [customWorkspaces, setCustomWorkspaces] = useState(['Default']);
+  const [activeWorkspace, setActiveWorkspace] = useState(() => localStorage.getItem('simcore_workspace') || 'Default');
 
-  const [scenario, setScenario] = useState({ name: 'Operation Alpha', activeDevices: [], udpIp: '127.0.0.1', udpPort: 5005, workspace: 'Default', kmlProbabilities: {} });
+  const [scenario, setScenario] = useState({ name: 'Operation Alpha', activeDevices: [], udpIp: '127.0.0.1', udpPort: 5005, workspace: 'Default', kmlProbabilities: {}, deviceAlertMapping: {} });
   const [alertConfig, setAlertConfig] = useState({ minDelaySec: 0.0001, maxDelaySec: 0.0005 });
   const [completedRuns, setCompletedRuns] = useState([]);
   const [activeAlerts, setActiveAlerts] = useState([]);
@@ -1149,7 +1229,6 @@ export default function App() {
     localStorage.setItem('simcore_workspace', activeWorkspace);
   }, [activeWorkspace]);
 
-  // COMBINE WORKSPACES FROM DATABASE DEVICES + MANUALLY CREATED ONES
   const allWorkspaces = useMemo(() => {
       const wsSet = new Set(devices.map(d => d.workspace || 'Default'));
       customWorkspaces.forEach(ws => wsSet.add(ws));
@@ -1165,6 +1244,12 @@ export default function App() {
   };
 
   useEffect(() => {
+    // NEW: Fetch Hardcoded Events from Backend
+    fetch('http://127.0.0.1:8000/api/config/sensor-events')
+      .then(res => res.json())
+      .then(data => setSensorEvents(data))
+      .catch(e => console.error("Failed to load sensor events"));
+
     fetch('http://127.0.0.1:8000/api/config/schemas')
       .then(res => { if (res.ok) { setDbStatus('CONNECTED'); return res.json(); } throw new Error(); })
       .then(data => { setSensorSchemas(Array.isArray(data) ? data : []); })
@@ -1176,7 +1261,6 @@ export default function App() {
     fetchHistory();
   }, []);
 
-  // Fetch specific scenario state based on the current workspace!
   useEffect(() => {
     fetch(`http://127.0.0.1:8000/api/state/scenario/${activeWorkspace}`)
       .then(res => res.json()).then(data => { if(data && data.name) setScenario(data); }).catch(e => console.error(e));
@@ -1194,7 +1278,6 @@ export default function App() {
             .then(data => {
                 if(!data) return;
                 
-                // BAILOUT CONDITIONS: Prevent React from re-rendering the DOM when completely idle
                 setSimIsRunning(prev => prev === !!data.is_running ? prev : !!data.is_running);
                 setSimProgress(prev => prev === data.progress ? prev : (data.progress || 0)); 
                 
@@ -1248,7 +1331,7 @@ export default function App() {
 
     const activeFleetWithOverrides = activeFleet.map(dev => ({ ...dev, alertCount: getAlertCount(dev) }));
     
-    // Explicitly pass KML Probabilities into the engine
+    // Explicitly pass both KML Probabilities AND Event Mapping into the engine
     const payload = {
         scenarioName: scenario?.name || 'Simulation',
         udpIp: scenario?.udpIp || '127.0.0.1',
@@ -1257,7 +1340,8 @@ export default function App() {
         environmentDevices: environmentFleet,
         alertConfig: alertConfig,
         sensorSchemas: Array.isArray(sensorSchemas) ? sensorSchemas : [],
-        kmlProbabilities: scenario?.kmlProbabilities || {}
+        kmlProbabilities: scenario?.kmlProbabilities || {},
+        deviceAlertMapping: scenario?.deviceAlertMapping || {}
     };
 
     try {
@@ -1272,6 +1356,18 @@ export default function App() {
 
   const stopSimulation = () => {
     fetch('http://127.0.0.1:8000/api/engine/stop', { method: 'POST' });
+  };
+  const handleClearAlerts = async () => {
+    if(window.confirm("Are you sure you want to clear all alerts from the map? This will not delete them from the database history.")) {
+        // Clear Frontend
+        setActiveAlerts([]);
+        // Clear Backend Engine Memory
+        try {
+            await fetch('http://127.0.0.1:8000/api/engine/clear-alerts', { method: 'POST' });
+        } catch (err) {
+            console.error("Failed to clear backend memory:", err);
+        }
+    }
   };
 
   const menuItems = [
@@ -1320,8 +1416,10 @@ export default function App() {
         
         <div className="flex-1 overflow-y-auto">
           {currentView === 'Device Configuration' && <DeviceConfigView devices={devices} setDevices={setDevices} sensorSchemas={sensorSchemas} setSensorSchemas={setSensorSchemas} allWorkspaces={allWorkspaces} setCustomWorkspaces={setCustomWorkspaces} activeWorkspace={activeWorkspace} setActiveWorkspace={setActiveWorkspace} />}
-          {currentView === 'Scenario Builder' && <ScenarioBuilderView devices={devices} scenario={scenario} setScenario={setScenario} sensorSchemas={sensorSchemas} activeWorkspace={activeWorkspace} />}
-          {currentView === 'Tactical Map' && <MapView devices={devices} alerts={activeAlerts} simIsRunning={simIsRunning} simProgress={simProgress} totalAlertsGenerated={totalAlertsGen} activeWorkspace={activeWorkspace} />}
+          
+          {currentView === 'Scenario Builder' && <ScenarioBuilderView devices={devices} scenario={scenario} setScenario={setScenario} sensorSchemas={sensorSchemas} activeWorkspace={activeWorkspace} sensorEvents={sensorEvents} />}
+          
+          {currentView === 'Tactical Map' && <MapView devices={devices} alerts={activeAlerts} simIsRunning={simIsRunning} simProgress={simProgress} totalAlertsGenerated={totalAlertsGen} activeWorkspace={activeWorkspace} clearAlerts={handleClearAlerts} />}
           {currentView === 'Alert Generator' && <AlertGeneratorView devices={devices} scenario={scenario} alertConfig={alertConfig} setAlertConfig={setAlertConfig} setCompletedRuns={setCompletedRuns} setActiveAlerts={setActiveAlerts} sensorSchemas={sensorSchemas} simIsRunning={simIsRunning} simLogs={simLogs} simProgress={simProgress} startSimulation={startSimulation} stopSimulation={stopSimulation} overrideCounts={overrideCounts} setOverrideCounts={setOverrideCounts} getAlertCount={getAlertCount} activeWorkspace={activeWorkspace} />}
           {currentView === 'Reports / Export' && <ExportView completedRuns={completedRuns} />}
         </div>

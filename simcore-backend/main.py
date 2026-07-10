@@ -24,6 +24,55 @@ from sqlalchemy import text
 from database import SessionLocal, engine, Base, SimulationRun, AlertLog, DeviceConfigDB, SchemaConfigDB, ScenarioStateDB
 
 # ==========================================================
+# HARDCODED SENSOR EVENTS (From sensorevents.txt)
+# ==========================================================
+SENSOR_EVENTS = {
+    "CAMERA": [
+        {"id": 20, "name": "Person"},
+        {"id": 21, "name": "Humans"},
+        {"id": 22, "name": "Tampering"},
+        {"id": 23, "name": "Intrusion Detection"},
+        {"id": 24, "name": "Loitering"},
+        {"id": 25, "name": "Dwell"},
+        {"id": 26, "name": "Lakshmanrekha crossing"},
+        {"id": 27, "name": "Fence Jumping"},
+        {"id": 28, "name": "Unattended Object"},
+        {"id": 29, "name": "Activity Detection"},
+        {"id": 30, "name": "Object removed detection"},
+        {"id": 31, "name": "Crowd Formation"},
+        {"id": 32, "name": "Queue Formation Detection"},
+        {"id": 33, "name": "Tailgating Detection"},
+        {"id": 34, "name": "Fire Detection"},
+        {"id": 35, "name": "Asset protection"},
+        {"id": 36, "name": "Zone Monitoring"},
+        {"id": 37, "name": "Artifact Protection"},
+        {"id": 1113, "name": "Licence Plate Recognition"},
+        {"id": 1124, "name": "FaceRecognition"},
+        {"id": 1125, "name": "FaceCapture"},
+        {"id": 1142, "name": "Missing Object"},
+        {"id": 1284, "name": "Object Detection"},
+        {"id": 1289, "name": "Abandoned Object Detection"},
+        {"id": 1291, "name": "Improper Parking Detection"},
+        {"id": 1293, "name": "Loitering Detection"},
+        {"id": 1295, "name": "Tripwire Detection"}
+    ],
+    "PIDS": [
+        {"id": 1099, "name": "FP_Processor Fault"},
+        {"id": 1100, "name": "FP_COM Fault"},
+        {"id": 1101, "name": "FP_Transmitter Fault"},
+        {"id": 1102, "name": "FP_Receiver Fault"},
+        {"id": 1103, "name": "FP_Power Fault"},
+        {"id": 1112, "name": "Intrusion"} # Added generic fallback
+    ],
+    "RADAR": [
+        {"id": 1, "name": "Person"},
+        {"id": 2, "name": "Vehicle"},
+        {"id": 3, "name": "Drone"},
+        {"id": 4, "name": "Animal"}
+    ]
+}
+
+# ==========================================================
 # SAFE ALERT ENGINE IMPORT
 # ==========================================================
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -55,6 +104,8 @@ try:
         try: conn.execute(text("ALTER TABLE scenario_state ADD COLUMN workspace VARCHAR DEFAULT 'Default';"))
         except: pass
         try: conn.execute(text("ALTER TABLE scenario_state ADD COLUMN kmlprobabilities TEXT DEFAULT '{}';"))
+        except: pass
+        try: conn.execute(text("ALTER TABLE scenario_state ADD COLUMN devicealertmapping TEXT DEFAULT '{}';"))
         except: pass
 except Exception as e:
     print("\nWARNING: Could not connect to PostgreSQL Database:", e)
@@ -108,6 +159,7 @@ class ScenarioModel(BaseModel):
     udpPort: int
     workspace: Optional[str] = "Default"
     kmlProbabilities: Optional[dict] = {}
+    deviceAlertMapping: Optional[dict] = {}
 
 class RangeExportRequest(BaseModel):
     startTime: str
@@ -136,26 +188,37 @@ def determine_priority(distance):
     if distance <= 3500: return "MEDIUM"
     return "LOW"
 
-def build_dynamic_packet(alert, device, track_id, pre_sorted_schema, separator):
+def build_dynamic_packet(alert, device, track_id, pre_sorted_schema, separator, device_alert_mapping):
     clean_type = str(device.type).upper()
+    chosen_target_type = device_alert_mapping.get(device.id)
+
     if not pre_sorted_schema:
         clean_id = str(device.id).replace("RADAR_", "").replace("CAM_", "").replace("PIDS_", "")
         if "PIDS" in clean_type:
-            return ",".join(map(str, [clean_id, 25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1112, 0, 0, 0, 0, 0, track_id, 0]))
+            target_val = chosen_target_type if chosen_target_type is not None else 1112
+            return ",".join(map(str, [clean_id, 25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, target_val, 0, 0, 0, 0, 0, track_id, 0]))
         elif "CAM" in clean_type:
-            return ",".join(map(str, [clean_id, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "Intrusion", 0, 0, 0]))
+            target_val = chosen_target_type if chosen_target_type is not None else "Intrusion"
+            return ",".join(map(str, [clean_id, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, target_val, 0, 0, 0]))
         else: 
             fov_start = (device.azimuth - (device.fov / 2)) % 360
             fov_end = (device.azimuth + (device.fov / 2)) % 360
-            return ",".join(map(str, [clean_id, 9, round(device.lat, 6), round(device.lng, 6), 0, round(device.azimuth, 2), round(fov_start, 2), round(fov_end, 2), track_id, round(alert["latitude"], 8), round(alert["longitude"], 8), round(alert.get("distance_m", 0), 2), round(alert.get("bearing", 0), 2), 0, 95, int(time.time()), 0, "", 0, 0, 0]))
+            target_val = chosen_target_type if chosen_target_type is not None else 1
+            return ",".join(map(str, [clean_id, 9, round(device.lat, 6), round(device.lng, 6), 0, round(device.azimuth, 2), round(fov_start, 2), round(fov_end, 2), track_id, round(alert["latitude"], 8), round(alert["longitude"], 8), round(alert.get("distance_m", 0), 2), round(alert.get("bearing", 0), 2), 0, target_val, int(time.time()), 0, "", 0, 0, 0]))
 
     packet = []
     for field in pre_sorted_schema:
+        fname = field.get('name', '').lower()
+        
+        # [NEW] Intercept TargetType BEFORE staticValue is applied to securely override it
+        if 'targettype' in fname and chosen_target_type is not None:
+            packet.append(str(chosen_target_type))
+            continue
+
         if field.get('staticValue') and str(field.get('staticValue')).strip() != "":
             packet.append(str(field.get('staticValue')).strip())
             continue
 
-        fname = field.get('name', '').lower()
         dtype = field.get('dataType', '')
         val = 0 
         
@@ -188,13 +251,8 @@ def build_dynamic_packet(alert, device, track_id, pre_sorted_schema, separator):
 # SPATIAL ENGINE WITH DYNAMIC PROBABILITIES
 # ==========================================================
 def build_spatial_indices(env_devices):
-    # Returns dictionaries mapping KML Source Files -> Unified Geometries
     perimeters, buildings, vegetations, waterbodies, transport_lines = {}, {}, {}, {}, {}
-    
-    # Temporary lists to group polygons by file
-    groups = {
-        "PERIMETER": {}, "BUILDING": {}, "VEGETATION": {}, "WATER": {}, "TRANSPORT": {}
-    }
+    groups = { "PERIMETER": {}, "BUILDING": {}, "VEGETATION": {}, "WATER": {}, "TRANSPORT": {} }
 
     for env in env_devices:
         cat = str(env.get("envCategory", "")).upper()
@@ -245,7 +303,6 @@ def sample_spatial_point(d_obj, p_unions, b_unions, v_unions, w_unions, t_unions
         cand_lat, cand_lng = round(cand_lat, 8), round(cand_lng, 8)
         pt = ShapelyPoint(cand_lng, cand_lat)
 
-        # 1. PERIMETER LOGIC (Contains check)
         is_outside_perimeters = False
         for fname, poly in p_unions.items():
             if not poly.contains(pt):
@@ -253,29 +310,24 @@ def sample_spatial_point(d_obj, p_unions, b_unions, v_unions, w_unions, t_unions
                 break
         if is_outside_perimeters: continue
         
-        # 2. BUILDING REJECTION LOGIC
         inside_building = False
         for fname, poly in b_unions.items():
             if poly.contains(pt):
-                # Retrieve custom user probability, default to 0.0
                 prob = kml_probs.get(fname, 0.0)
                 if random.random() > prob: 
                     inside_building = True
                     break
         if inside_building: continue
 
-        # 3. BASE PROBABILITY (Free Terrain)
         final_prob = 0.35 
         matched_feature = False
         
-        # 4. TRANSPORT LOGIC
         for fname, line in t_unions.items():
             if line.distance(pt) < 0.00018:
                 final_prob = kml_probs.get(fname, 0.95)
                 matched_feature = True
                 break
                 
-        # 5. VEGETATION LOGIC
         if not matched_feature:
             for fname, poly in v_unions.items():
                 if poly.contains(pt):
@@ -283,7 +335,6 @@ def sample_spatial_point(d_obj, p_unions, b_unions, v_unions, w_unions, t_unions
                     matched_feature = True
                     break
         
-        # 6. WATER LOGIC
         if not matched_feature:
             for fname, poly in w_unions.items():
                 if poly.contains(pt):
@@ -293,13 +344,12 @@ def sample_spatial_point(d_obj, p_unions, b_unions, v_unions, w_unions, t_unions
         if random.random() <= final_prob:
             return cand_lat, cand_lng, round(dist, 2), round(bearing, 2), determine_priority(dist)
 
-    # Fallback if it exceeds 25 attempts
     return cand_lat, cand_lng, round(dist, 2), round(bearing, 2), determine_priority(dist)
 
 # ==========================================================
 # THE HIGH PERFORMANCE ENGINE WORKER
 # ==========================================================
-def simulation_worker(scenarioName, udpIp, udpPort, active_devices, env_devices, schemas, minDelay, maxDelay, kml_probs):
+def simulation_worker(scenarioName, udpIp, udpPort, active_devices, env_devices, schemas, minDelay, maxDelay, kml_probs, device_alert_mapping):
     global engine_state
     
     pool = []
@@ -373,7 +423,6 @@ def simulation_worker(scenarioName, udpIp, udpPort, active_devices, env_devices,
         d_obj.polygon = dev_dict.get('polygon', [])
         d_obj.packetChoice = dev_dict.get('packetChoice', '')
 
-        # Pass custom KML probabilities into point sampler
         alert_lat, alert_lng, dist, bearing, priority = sample_spatial_point(d_obj, p_unions, b_unions, v_unions, w_unions, t_unions, kml_probs)
         track_id = idx + 1
         
@@ -390,7 +439,9 @@ def simulation_worker(scenarioName, udpIp, udpPort, active_devices, env_devices,
         sel_schema = cache_entry['schema'] if cache_entry else None
         sel_sep = cache_entry['separator'] if cache_entry else ","
 
-        packet_string = build_dynamic_packet(alert_data, d_obj, track_id, sel_schema, sel_sep)
+        # Pass dynamic mappings into the packet builder!
+        packet_string = build_dynamic_packet(alert_data, d_obj, track_id, sel_schema, sel_sep, device_alert_mapping)
+        
         try: udp_socket.sendto(packet_string.encode('utf-8'), (str(udpIp), int(udpPort)))
         except Exception: pass
 
@@ -425,6 +476,21 @@ def simulation_worker(scenarioName, udpIp, udpPort, active_devices, env_devices,
     with engine_lock:
         engine_state['is_running'] = False
 
+
+# ==========================================================
+# FASTAPI ENDPOINTS
+# ==========================================================
+
+# Endpoint that serves the HARDCODED target selections to frontend
+@app.post("/api/engine/clear-alerts")
+def api_engine_clear_alerts():
+    with engine_lock:
+        engine_state["map_alerts"] = []
+    return {"status": "success"}
+@app.get("/api/config/sensor-events")
+def get_sensor_events():
+    return SENSOR_EVENTS
+
 @app.post("/api/engine/start")
 def api_engine_start(payload: dict):
     global engine_state
@@ -442,7 +508,8 @@ def api_engine_start(payload: dict):
             payload["scenarioName"], payload["udpIp"], payload["udpPort"],
             payload["activeDevices"], payload["environmentDevices"], payload["sensorSchemas"],
             payload["alertConfig"]["minDelaySec"], payload["alertConfig"]["maxDelaySec"],
-            payload.get("kmlProbabilities", {})
+            payload.get("kmlProbabilities", {}),
+            payload.get("deviceAlertMapping", {})
         ),
         daemon=True
     )
@@ -631,9 +698,6 @@ def delete_schema(schema_name: str, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "success"}
 
-# ==========================================================
-# SCENARIO WORKSPACE STATE MANAGEMENT (Updated)
-# ==========================================================
 @app.get("/api/state/scenario/{workspace_name}")
 def get_scenario_state(workspace_name: str, db: Session = Depends(get_db)):
     s = db.query(ScenarioStateDB).filter(ScenarioStateDB.id == workspace_name).first()
@@ -644,9 +708,10 @@ def get_scenario_state(workspace_name: str, db: Session = Depends(get_db)):
             "udpIp": s.udpIp, 
             "udpPort": s.udpPort, 
             "workspace": s.workspace,
-            "kmlProbabilities": json.loads(s.kmlProbabilities) if s.kmlProbabilities else {}
+            "kmlProbabilities": json.loads(s.kmlProbabilities) if s.kmlProbabilities else {},
+            "deviceAlertMapping": json.loads(s.deviceAlertMapping) if getattr(s, 'deviceAlertMapping', None) else {}
         }
-    return { "name": f"{workspace_name} Mission", "activeDevices": [], "udpIp": "127.0.0.1", "udpPort": 5005, "workspace": workspace_name, "kmlProbabilities": {} }
+    return { "name": f"{workspace_name} Mission", "activeDevices": [], "udpIp": "127.0.0.1", "udpPort": 5005, "workspace": workspace_name, "kmlProbabilities": {}, "deviceAlertMapping": {} }
 
 @app.post("/api/state/scenario")
 def save_scenario_state(payload: ScenarioModel, db: Session = Depends(get_db)):
@@ -655,6 +720,7 @@ def save_scenario_state(payload: ScenarioModel, db: Session = Depends(get_db)):
     
     dev_str = json.dumps(payload.activeDevices)
     prob_str = json.dumps(payload.kmlProbabilities) if payload.kmlProbabilities else "{}"
+    map_str = json.dumps(payload.deviceAlertMapping) if getattr(payload, 'deviceAlertMapping', None) else "{}"
     
     if s:
         s.name = payload.name
@@ -663,6 +729,7 @@ def save_scenario_state(payload: ScenarioModel, db: Session = Depends(get_db)):
         s.udpPort = payload.udpPort
         s.workspace = target_workspace
         s.kmlProbabilities = prob_str
+        s.deviceAlertMapping = map_str
     else:
         new_s = ScenarioStateDB(
             id=target_workspace, 
@@ -671,7 +738,8 @@ def save_scenario_state(payload: ScenarioModel, db: Session = Depends(get_db)):
             udpIp=payload.udpIp, 
             udpPort=payload.udpPort, 
             workspace=target_workspace,
-            kmlProbabilities=prob_str
+            kmlProbabilities=prob_str,
+            deviceAlertMapping=map_str
         )
         db.add(new_s)
     db.commit()

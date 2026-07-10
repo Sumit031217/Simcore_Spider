@@ -73,13 +73,16 @@ class ScenarioStateDB(Base):
     __tablename__ = "scenario_state"
     id = Column(String, primary_key=True, index=True) 
     name = Column(String)
+    
+    # [FIXED] Restored the original implicit CamelCase mapping for old columns
     activeDevices = Column(Text) 
     udpIp = Column(String)
     udpPort = Column(Integer)
     workspace = Column(String, default="Default")
     
-    # [NEW] Store custom probabilities for KML files in this scenario
-    kmlProbabilities = Column(Text, default="{}") 
+    # Kept explicit lowercase mapping ONLY for the newly injected columns
+    kmlProbabilities = Column("kmlprobabilities", Text, default="{}") 
+    deviceAlertMapping = Column("devicealertmapping", Text, default="{}") 
 
 class ActiveAlertDB(Base):
     __tablename__ = "active_alerts"
