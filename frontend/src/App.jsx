@@ -47,7 +47,7 @@ const parseKmlColor = (kmlHex) => {
 // ==========================================
 // MODULE 1: DEVICE CONFIGURATION
 // ==========================================
-const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas, allWorkspaces, setCustomWorkspaces, activeWorkspace, setActiveWorkspace }) => {
+const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas, allWorkspaces, setCustomWorkspaces, activeWorkspace, setActiveWorkspace, handleSensorEventsUpload }) => {
   const [status, setStatus] = useState({ message: 'System Ready', type: 'info' });
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
 
@@ -291,7 +291,7 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
           </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-sm flex flex-col relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-1 bg-fuchsia-500"></div>
@@ -303,6 +303,18 @@ const DeviceConfigView = ({ devices, setDevices, sensorSchemas, setSensorSchemas
             <p className="text-sm font-bold text-slate-300">Upload JSON Schema(s)</p>
           </div>
         </div>
+        {/* --- START OF THE CODE YOU JUST PASTED --- */}
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-sm flex flex-col relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-fuchsia-500"></div>
+          <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-1 flex items-center"><Terminal className="w-4 h-4 mr-2 text-fuchsia-400"/> Global Sensor Events</h3>
+          <p className="text-[10px] font-mono text-slate-500 mb-4 truncate">Applies globally across all workspaces</p>
+          <div className="border-2 border-dashed border-slate-700 rounded-lg p-6 text-center hover:bg-slate-800/50 transition-colors relative flex-1 flex flex-col justify-center">
+            <input type="file" accept=".json" onClick={(e) => { e.target.value = null; }} onChange={handleSensorEventsUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+            <Server className="w-8 h-8 text-slate-500 mx-auto mb-2" />
+            <p className="text-sm font-bold text-slate-300">Upload Events (.JSON)</p>
+          </div>
+        </div>
+        {/* --- END OF THE CODE YOU JUST PASTED --- */}
 
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 shadow-sm flex flex-col relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-1 bg-emerald-500"></div>
@@ -1357,6 +1369,40 @@ export default function App() {
   const stopSimulation = () => {
     fetch('http://127.0.0.1:8000/api/engine/stop', { method: 'POST' });
   };
+  // --- PASTE THIS NEW FUNCTION RIGHT BELOW stopSimulation ---
+  const handleSensorEventsUpload = async (event) => {
+    const files = Array.from(event.target.files);
+    if (!files.length) return;
+
+    try {
+        const text = await files[0].text();
+        const parsedData = JSON.parse(text);
+        
+        // Validate structure matches SENSOR_EVENTS.json
+        if (!parsedData.protocolName || !Array.isArray(parsedData.fields)) {
+            throw new Error("Invalid format. Expected 'protocolName' and 'fields' array.");
+        }
+
+        const response = await fetch('http://127.0.0.1:8000/api/config/sensor-events', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(parsedData)
+        });
+
+        if (response.ok) {
+            alert("✅ SUCCESS: Global Sensor Events saved to Database!");
+            // Instantly refresh the UI dropdowns
+            const updatedEvents = await fetch('http://127.0.0.1:8000/api/config/sensor-events').then(res => res.json());
+            setSensorEvents(updatedEvents);
+        } else {
+            const errText = await response.text();
+            alert("❌ PYTHON REJECTED THE DATA:\n" + errText);
+        }
+    } catch (err) { 
+        alert(`🚨 EVENT UPLOAD ERROR in ${files[0].name}!\n\nDetails: ${err.message}`); 
+    }
+  };
+  // --------------------------------------------------------
   const handleClearAlerts = async () => {
     if(window.confirm("Are you sure you want to clear all alerts from the map? This will not delete them from the database history.")) {
         // Clear Frontend
@@ -1415,8 +1461,7 @@ export default function App() {
         </header>
         
         <div className="flex-1 overflow-y-auto">
-          {currentView === 'Device Configuration' && <DeviceConfigView devices={devices} setDevices={setDevices} sensorSchemas={sensorSchemas} setSensorSchemas={setSensorSchemas} allWorkspaces={allWorkspaces} setCustomWorkspaces={setCustomWorkspaces} activeWorkspace={activeWorkspace} setActiveWorkspace={setActiveWorkspace} />}
-          
+         {currentView === 'Device Configuration' && <DeviceConfigView devices={devices} setDevices={setDevices} sensorSchemas={sensorSchemas} setSensorSchemas={setSensorSchemas} allWorkspaces={allWorkspaces} setCustomWorkspaces={setCustomWorkspaces} activeWorkspace={activeWorkspace} setActiveWorkspace={setActiveWorkspace} handleSensorEventsUpload={handleSensorEventsUpload} />}
           {currentView === 'Scenario Builder' && <ScenarioBuilderView devices={devices} scenario={scenario} setScenario={setScenario} sensorSchemas={sensorSchemas} activeWorkspace={activeWorkspace} sensorEvents={sensorEvents} />}
           
           {currentView === 'Tactical Map' && <MapView devices={devices} alerts={activeAlerts} simIsRunning={simIsRunning} simProgress={simProgress} totalAlertsGenerated={totalAlertsGen} activeWorkspace={activeWorkspace} clearAlerts={handleClearAlerts} />}

@@ -20,58 +20,11 @@ from shapely.geometry import Polygon as ShapelyPolygon, LineString as ShapelyLin
 from shapely.ops import unary_union
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-
-from database import SessionLocal, engine, Base, SimulationRun, AlertLog, DeviceConfigDB, SchemaConfigDB, ScenarioStateDB
+from database import SessionLocal, engine, Base, SimulationRun, AlertLog, DeviceConfigDB, SchemaConfigDB, ScenarioStateDB, SensorEventDB
 
 # ==========================================================
 # HARDCODED SENSOR EVENTS (From sensorevents.txt)
 # ==========================================================
-SENSOR_EVENTS = {
-    "CAMERA": [
-        {"id": 20, "name": "Person"},
-        {"id": 21, "name": "Humans"},
-        {"id": 22, "name": "Tampering"},
-        {"id": 23, "name": "Intrusion Detection"},
-        {"id": 24, "name": "Loitering"},
-        {"id": 25, "name": "Dwell"},
-        {"id": 26, "name": "Lakshmanrekha crossing"},
-        {"id": 27, "name": "Fence Jumping"},
-        {"id": 28, "name": "Unattended Object"},
-        {"id": 29, "name": "Activity Detection"},
-        {"id": 30, "name": "Object removed detection"},
-        {"id": 31, "name": "Crowd Formation"},
-        {"id": 32, "name": "Queue Formation Detection"},
-        {"id": 33, "name": "Tailgating Detection"},
-        {"id": 34, "name": "Fire Detection"},
-        {"id": 35, "name": "Asset protection"},
-        {"id": 36, "name": "Zone Monitoring"},
-        {"id": 37, "name": "Artifact Protection"},
-        {"id": 1113, "name": "Licence Plate Recognition"},
-        {"id": 1124, "name": "FaceRecognition"},
-        {"id": 1125, "name": "FaceCapture"},
-        {"id": 1142, "name": "Missing Object"},
-        {"id": 1284, "name": "Object Detection"},
-        {"id": 1289, "name": "Abandoned Object Detection"},
-        {"id": 1291, "name": "Improper Parking Detection"},
-        {"id": 1293, "name": "Loitering Detection"},
-        {"id": 1295, "name": "Tripwire Detection"}
-    ],
-    "PIDS": [
-        {"id": 1099, "name": "FP_Processor Fault"},
-        {"id": 1100, "name": "FP_COM Fault"},
-        {"id": 1101, "name": "FP_Transmitter Fault"},
-        {"id": 1102, "name": "FP_Receiver Fault"},
-        {"id": 1103, "name": "FP_Power Fault"},
-        {"id": 1112, "name": "Intrusion"} # Added generic fallback
-    ],
-    "RADAR": [
-        {"id": 1, "name": "Person"},
-        {"id": 2, "name": "Vehicle"},
-        {"id": 3, "name": "Drone"},
-        {"id": 4, "name": "Animal"}
-    ]
-}
-
 # ==========================================================
 # SAFE ALERT ENGINE IMPORT
 # ==========================================================
@@ -151,6 +104,16 @@ class SchemaModel(BaseModel):
     separator: str
     totalIndexes: int
     schema_data: list = Field(default=[], alias="schema")
+
+class SensorEventFieldModel(BaseModel):
+    ID: int
+    Name: str
+    Sensor_Type: str
+
+class SensorEventUploadModel(BaseModel):
+    protocolName: str
+    separator: str
+    fields: List[SensorEventFieldModel]    
 
 class ScenarioModel(BaseModel):
     name: str
@@ -488,9 +451,37 @@ def api_engine_clear_alerts():
         engine_state["map_alerts"] = []
     return {"status": "success"}
 @app.get("/api/config/sensor-events")
-def get_sensor_events():
-    return SENSOR_EVENTS
+def get_sensor_events(db: Session = Depends(get_db)):
+    events = db.query(SensorEventDB).all()
+    
+    # Group them dynamically so the frontend dropdowns work exactly as before
+    grouped_events = {"CAMERA": [], "RADAR": [], "PIDS": []}
+    for ev in events:
+        stype = str(ev.sensor_type).upper()
+        if stype not in grouped_events:
+            grouped_events[stype] = []
+        grouped_events[stype].append({"id": ev.event_id, "name": ev.name})
+        
+    return grouped_events
 
+@app.post("/api/config/sensor-events")
+def save_sensor_events(payload: SensorEventUploadModel, db: Session = Depends(get_db)):
+    try:
+        # Clear existing events so re-uploading a new file updates the list cleanly
+        db.query(SensorEventDB).delete()
+        
+        for field in payload.fields:
+            new_event = SensorEventDB(
+                event_id=field.ID,
+                name=field.Name,
+                sensor_type=field.Sensor_Type
+            )
+            db.add(new_event)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+    return {"status": "success"}
 @app.post("/api/engine/start")
 def api_engine_start(payload: dict):
     global engine_state

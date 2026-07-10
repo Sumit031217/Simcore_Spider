@@ -103,3 +103,13 @@ class TelemetryLogDB(Base):
     time = Column(String)
     msg = Column(Text)
     type = Column(String)
+
+# ==========================================
+# GLOBAL CONFIGURATION TABLES
+# ==========================================
+class SensorEventDB(Base):
+    __tablename__ = "sensor_events"
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    event_id = Column(Integer)
+    name = Column(String)
+    sensor_type = Column(String)
